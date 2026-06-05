@@ -1,0 +1,3 @@
+prix: 18.00
+devise: EUR
+tags: lavande, bougie cire soja, fait main, déco zen, cadeau femme

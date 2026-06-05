@@ -1,0 +1,20 @@
+# Batch configuration for a publication run.
+# Copy this file to `batch.txt` and edit the values.
+#
+# Lines starting with # are ignored. No quotes around values.
+
+# REQUIRED
+price: 35
+base_tag: peluche personnalisée
+
+# OPTIONAL (defaults shown below)
+currency: EUR
+language: en
+quantity: 1
+who_made: i_did
+when_made: made_to_order
+
+# Processing time (Etsy readiness state). Unit: days or weeks.
+min_processing_time: 1
+max_processing_time: 3
+processing_time_unit: weeks

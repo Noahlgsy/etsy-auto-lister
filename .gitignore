@@ -1,0 +1,28 @@
+# ── Secrets & environment ──────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Python ─────────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# ── OS / editors ───────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+
+# ── Generated product output (keep the example) ────────
+products/*
+!products/exemple-produit/
+
+# ── Local run config (keep the .example templates) ─────
+batch.txt
+
+# ── Caches & large regenerable / scraped data ──────────
+taxonomy_cache.json
+data/competitors/
+data/easypic/

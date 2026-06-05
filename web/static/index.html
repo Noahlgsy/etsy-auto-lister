@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Atelier Etsy · ThePlushFoundry</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">◆</span>
+      <div class="brand-txt">
+        <h1>Atelier Etsy</h1>
+        <span class="sub">peluches fait-main → brouillons</span>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <button class="nav-btn active" data-view="atelier">Atelier</button>
+      <button class="nav-btn" data-view="easypic">Easy picture</button>
+      <button class="nav-btn" data-view="tags">Tag Searcher</button>
+      <button class="nav-btn" data-view="concurrents">Concurrents</button>
+      <button class="nav-btn" data-view="telecharges">Listings téléchargés</button>
+      <button class="nav-btn" data-view="niches">Niche Tracker</button>
+      <button class="nav-btn" data-view="reglages">Réglages</button>
+    </nav>
+
+    <div class="status">
+      <span class="pill loading" id="pill-erank"><i></i> eRank</span>
+      <span class="pill loading" id="pill-niche"><i></i> eRank+</span>
+      <span class="pill loading" id="pill-flow"><i></i> Flow</span>
+      <span id="shop-switch" class="shop-switch hidden"></span>
+      <a class="shop-link" href="https://www.etsy.com/your/shops/me/tools/listings"
+         target="_blank" rel="noopener" title="Ouvrir ta boutique Etsy">Ma boutique ↗</a>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- Sidebar : produits déjà générés -->
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <h2>Produits</h2>
+        <button id="refresh-folders" class="icon-btn" title="Rafraîchir">↻</button>
+      </div>
+      <div id="folders" class="folders">
+        <p class="muted small">Chargement…</p>
+      </div>
+    </aside>
+
+    <section class="content">
+
+      <!-- =============== VUE ATELIER =============== -->
+      <div id="view-atelier" class="view">
+        <div class="view-head">
+          <h2>Nouveau produit</h2>
+          <p class="muted">Dépose une photo : images générées → listing → brouillon Etsy, automatiquement.</p>
+        </div>
+
+        <div class="card">
+          <div id="dropzone" class="dropzone">
+            <div class="dz-icon">⬆</div>
+            <p class="dz-title">Dépose tes photos ici</p>
+            <p class="dz-sub">ou <button id="dz-browse" class="link" type="button">parcours tes fichiers</button> · JPG · PNG · WEBP</p>
+            <input id="file-input" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden />
+          </div>
+
+          <div id="input-list-head" class="input-list-head hidden">
+            <span id="input-count" class="muted small"></span>
+            <span class="ilh-tools">
+              <button type="button" class="link small" id="clear-generated" title="Retirer de la file les produits dont les images sont déjà générées">Effacer les générées</button>
+              <span class="muted">·</span>
+              <button type="button" class="link small danger" id="clear-all" title="Vider toute la file d'attente">Vider la file</button>
+            </span>
+          </div>
+
+          <div id="input-list" class="input-list"></div>
+
+          <div id="gen-prompts" class="gen-prompts hidden">
+            <div class="gen-prompts-head">
+              <span class="gp-title">Prompts envoyés à Flow</span>
+              <span class="gp-tools">
+                <button type="button" class="link small" id="gp-all">Tout</button>
+                <span class="muted">·</span>
+                <button type="button" class="link small" id="gp-none">Aucun</button>
+              </span>
+            </div>
+            <div id="gen-prompts-list" class="gen-prompts-list"></div>
+          </div>
+
+          <div class="gen-bar">
+            <label class="switch">
+              <input type="checkbox" id="opt-autopublish" checked />
+              <span class="track"></span>
+              <span class="switch-label">Créer le brouillon Etsy automatiquement</span>
+            </label>
+            <span id="gen-shop" class="gen-shop hidden"></span>
+            <button id="btn-preview-only" class="ghost" disabled title="Construit le listing à partir des images déjà générées, sans relancer Google Flow">Aperçu seulement</button>
+            <button id="btn-generate" class="primary" disabled>Lancer la génération</button>
+          </div>
+          <p class="hint">Prix &amp; tag de base utilisés = ceux des <button class="link" data-goto="reglages" type="button">Réglages</button>. La génération pilote Chrome / Google Flow et prend quelques minutes par photo. « Aperçu seulement » saute Flow quand les images existent déjà.</p>
+        </div>
+
+        <!-- Progression du job -->
+        <div id="job-card" class="card hidden">
+          <div class="job-head">
+            <h3>Génération</h3>
+            <div class="job-head-right">
+              <span id="job-status" class="badge">…</span>
+              <button id="btn-cancel" class="ghost small-btn hidden">■ Arrêter</button>
+            </div>
+          </div>
+          <div class="steps" id="job-steps">
+            <span class="step" data-step="chrome"><b>1</b> Chrome</span>
+            <span class="step" data-step="images"><b>2</b> Images</span>
+            <span class="step" data-step="listing"><b>3</b> Listing</span>
+            <span class="step" data-step="draft"><b>4</b> Brouillon</span>
+          </div>
+          <div id="job-progress" class="job-progress hidden">
+            <div class="pbar"><span id="job-bar"></span></div>
+            <div class="pmeta">
+              <span id="job-count" class="muted small"></span>
+              <span id="job-eta" class="muted small"></span>
+            </div>
+          </div>
+          <pre id="job-log" class="log"></pre>
+          <div id="job-results" class="job-results"></div>
+        </div>
+      </div>
+
+      <!-- =============== VUE PRODUIT =============== -->
+      <div id="view-produit" class="view hidden">
+        <div class="ws-head">
+          <button id="back-atelier" class="ghost small-btn">← Retour</button>
+          <h2 id="ws-title">—</h2>
+          <span id="ws-meta" class="muted"></span>
+        </div>
+
+        <div id="image-strip" class="image-strip"></div>
+
+        <div class="config card">
+          <div class="field">
+            <label for="cfg-base-tag">Tag de base (niche / fandom)</label>
+            <input id="cfg-base-tag" type="text" placeholder="ex : dandys world" />
+          </div>
+          <div class="field small">
+            <label for="cfg-price">Prix</label>
+            <input id="cfg-price" type="number" step="0.01" min="0" />
+          </div>
+          <div class="field small">
+            <label for="cfg-language">Langue</label>
+            <select id="cfg-language">
+              <option value="en">English</option>
+              <option value="fr">Français</option>
+            </select>
+          </div>
+          <button id="btn-preview" class="primary">Générer l'aperçu</button>
+        </div>
+
+        <div id="preview" class="preview hidden">
+          <div class="card">
+            <div class="field">
+              <label for="pv-title">Titre <span id="title-count" class="counter"></span></label>
+              <input id="pv-title" type="text" maxlength="140" />
+            </div>
+            <div class="field">
+              <label for="pv-description">Description <span id="desc-count" class="counter"></span></label>
+              <textarea id="pv-description" rows="8"></textarea>
+            </div>
+            <div class="field">
+              <label>Tags <span id="tags-count" class="counter"></span></label>
+              <div id="tags" class="tags"></div>
+              <button id="btn-add-tag" class="ghost small-btn">+ tag</button>
+            </div>
+            <div class="field">
+              <label for="pv-materials">Matériaux (séparés par des virgules)</label>
+              <input id="pv-materials" type="text" />
+            </div>
+            <div class="three">
+              <div class="field">
+                <label for="pv-primary-color">Couleur principale</label>
+                <select id="pv-primary-color"></select>
+              </div>
+              <div class="field">
+                <label for="pv-secondary-color">Couleur secondaire</label>
+                <select id="pv-secondary-color"></select>
+              </div>
+              <div class="field">
+                <label for="pv-occasion">Occasion</label>
+                <input id="pv-occasion" type="text" placeholder="ex : Birthday" />
+              </div>
+            </div>
+            <div class="meta-row muted">
+              <span id="pv-category"></span>
+              <span id="pv-taxonomy"></span>
+            </div>
+            <div class="actions">
+              <button id="btn-publish" class="primary">Publier le brouillon Etsy</button>
+              <span id="publish-shop" class="publish-shop hidden"></span>
+              <span id="publish-note" class="muted">Crée un vrai brouillon sur ta boutique.</span>
+            </div>
+          </div>
+        </div>
+
+        <div id="result" class="result hidden"></div>
+      </div>
+
+      <!-- =============== VUE EASY PICTURE =============== -->
+      <div id="view-easypic" class="view hidden">
+        <div class="view-head">
+          <h2>Easy picture</h2>
+          <p class="muted">Récupère les photos d'une fiche produit (AliExpress ou autre URL),
+            choisis-en, génère de <b>nouvelles</b> images avec Flow, puis un listing complet.</p>
+        </div>
+
+        <div class="card">
+          <div class="search-row">
+            <input id="ep-url" type="text" placeholder="URL d'une fiche produit — ex : https://fr.aliexpress.com/item/100500.html" />
+            <button id="ep-fetch" class="primary">Récupérer les photos</button>
+          </div>
+          <p class="hint">
+            Le site bloque la récupération ?
+            <button class="link" id="ep-manual-toggle" type="button">Colle directement des URLs d'images</button>.
+            Sert à analyser / s'inspirer puis générer <b>tes propres</b> images — pas à republier les photos brutes.
+          </p>
+          <div id="ep-manual" class="ep-manual hidden">
+            <textarea id="ep-manual-urls" rows="3" placeholder="Une URL d'image par ligne (jpg · png · webp)…"></textarea>
+            <div class="row-end">
+              <button id="ep-manual-go" class="ghost small-btn">Charger ces images</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="ep-photos" class="card hidden">
+          <div class="ep-photos-head">
+            <span id="ep-title" class="ep-title muted small"></span>
+            <span class="ep-tools">
+              <span id="ep-sel-count" class="muted small"></span>
+              <button type="button" class="link small" id="ep-all">Tout</button>
+              <span class="muted">·</span>
+              <button type="button" class="link small" id="ep-none">Aucune</button>
+            </span>
+          </div>
+          <div id="ep-grid" class="ep-grid"></div>
+        </div>
+
+        <div id="ep-gen" class="card hidden">
+          <div class="field">
+            <label for="ep-name">Nom du produit <span class="muted small">(dossier + base du listing)</span></label>
+            <input id="ep-name" type="text" placeholder="ex : peluche renard kawaii" />
+          </div>
+
+          <div class="field">
+            <label for="ep-base-tag">Tag de base eRank <span class="muted small">(remplace batch.txt pour CE listing — laisse vide pour le défaut)</span></label>
+            <input id="ep-base-tag" type="text" placeholder="ex : fox plush" />
+          </div>
+
+          <div id="ep-prompts" class="gen-prompts">
+            <div class="gen-prompts-head">
+              <span class="gp-title">Prompts envoyés à Flow</span>
+              <span class="gp-tools">
+                <button type="button" class="link small" id="ep-gp-all">Tout</button>
+                <span class="muted">·</span>
+                <button type="button" class="link small" id="ep-gp-none">Aucun</button>
+              </span>
+            </div>
+            <div id="ep-prompts-list" class="gen-prompts-list"></div>
+          </div>
+
+          <label class="switch ep-permode">
+            <input type="checkbox" id="ep-per-image" />
+            <span class="track"></span>
+            <span class="switch-label">1 référence par photo → 1 seul listing <span class="muted small">(chaque photo sélectionnée devient une réf. Flow ; N photos = ≥ N images regroupées)</span></span>
+          </label>
+
+          <div class="gen-bar">
+            <label class="switch">
+              <input type="checkbox" id="ep-autopublish" checked />
+              <span class="track"></span>
+              <span class="switch-label">Créer le brouillon Etsy automatiquement</span>
+            </label>
+            <span id="ep-shop" class="gen-shop hidden"></span>
+            <button id="ep-preview-only" class="ghost" title="Construit le listing à partir des photos sélectionnées, sans relancer Google Flow">Aperçu direct (sans Flow)</button>
+            <button id="ep-generate" class="primary" disabled>✨ Générer de nouvelles images avec Flow</button>
+          </div>
+          <p class="hint" id="ep-hint">La <b>1ʳᵉ photo sélectionnée</b> sert de référence à Flow. La génération pilote Chrome / Google Flow et prend quelques minutes. « Aperçu direct » bâtit la fiche à partir des photos choisies, sans Flow.</p>
+        </div>
+
+        <div id="ep-job" class="card hidden">
+          <div class="job-head">
+            <h3>Génération</h3>
+            <div class="job-head-right">
+              <span id="ep-job-status" class="badge">…</span>
+              <button id="ep-job-cancel" class="ghost small-btn hidden">■ Arrêter</button>
+            </div>
+          </div>
+          <div id="ep-job-progress" class="job-progress hidden">
+            <div class="pbar"><span id="ep-job-bar"></span></div>
+            <div class="pmeta">
+              <span id="ep-job-count" class="muted small"></span>
+              <span id="ep-job-eta" class="muted small"></span>
+            </div>
+          </div>
+          <pre id="ep-job-log" class="log"></pre>
+          <div id="ep-job-results" class="job-results"></div>
+        </div>
+      </div>
+
+      <!-- =============== VUE RÉGLAGES =============== -->
+      <div id="view-reglages" class="view hidden">
+        <div class="view-head">
+          <h2>Réglages</h2>
+          <p class="muted">Tes prompts d'images, ton prix et ton tag de base.</p>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3>Prompts d'images</h3>
+            <p class="muted small">Clique sur un prompt pour le modifier. Chaque photo génère une image par prompt sélectionné.</p>
+
+            <div class="prompt-gen">
+              <div class="prompt-gen-row">
+                <input id="pg-product" type="text" class="pg-input"
+                       placeholder="Veuillez entrer votre produit (ex : t-shirt bleu)" />
+                <button id="pg-go" class="primary small-btn">✨ Générer 5 prompts</button>
+              </div>
+              <p class="muted small pg-hint">Claude propose 5 mises en scène variées pour ton produit (≈ 1 centime).</p>
+              <div id="pg-result" class="pg-result hidden"></div>
+            </div>
+
+            <div id="prompts-list" class="prompts-editor"></div>
+            <div class="row-end">
+              <span id="prompts-count" class="muted small"></span>
+              <button id="btn-add-prompt" class="ghost small-btn">＋ Ajouter un prompt</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Prix &amp; tag de base</h3>
+            <div class="field">
+              <label for="set-price">Prix</label>
+              <input id="set-price" type="number" step="0.01" min="0" />
+            </div>
+            <div class="field">
+              <label for="set-basetag">Tag de base (niche / fandom)</label>
+              <input id="set-basetag" type="text" placeholder="ex : dandys world" />
+            </div>
+            <div class="two">
+              <div class="field">
+                <label for="set-language">Langue</label>
+                <select id="set-language">
+                  <option value="en">English</option>
+                  <option value="fr">Français</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="set-quantity">Quantité</label>
+                <input id="set-quantity" type="number" min="1" />
+              </div>
+            </div>
+            <div class="row-end">
+              <button id="btn-save-config" class="primary">Enregistrer</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Services locaux</h3>
+          <div class="svc-row">
+            <span class="pill loading" id="svc-erank"><i></i> eRank API</span>
+            <span class="pill loading" id="svc-flow"><i></i> Chrome / Flow</span>
+            <button id="btn-flow-start" class="ghost small-btn hidden">Lancer Chrome / Flow</button>
+          </div>
+          <p class="muted small" id="svc-detail"></p>
+          <div class="erank-test">
+            <input id="erank-q" type="text" placeholder="tester un mot-clé — ex : dandys world" />
+            <button id="btn-erank-test" class="ghost">Voir les tags</button>
+          </div>
+          <div id="erank-tags" class="tags-preview"></div>
+        </div>
+      </div>
+
+      <!-- =============== VUE TAG SEARCHER =============== -->
+      <div id="view-tags" class="view hidden">
+        <div class="view-head">
+          <h2>Tag Searcher</h2>
+          <p class="muted">Recherches, concurrence, CTR &amp; clics — données eRank. Compare plusieurs variantes d'un coup.</p>
+        </div>
+        <div class="card">
+          <div class="search-row">
+            <input id="ts-q" type="text" placeholder="un ou plusieurs tags séparés par des virgules — ex : dandys world, dandys world plush, roblox plush" />
+            <button id="ts-go" class="primary">Analyser</button>
+          </div>
+          <p class="hint">Clique « Top boutiques » sur une ligne pour voir qui gagne de l'argent dessus, ou « Meilleurs tags » pour des variantes.</p>
+        </div>
+        <div id="ts-results" class="card hidden"></div>
+        <div id="ts-suggest" class="card hidden"></div>
+      </div>
+
+      <!-- =============== VUE ESPION CONCURRENTS =============== -->
+      <div id="view-concurrents" class="view hidden">
+        <div class="view-head">
+          <h2>Espion concurrents</h2>
+          <p class="muted">Pour un tag : les boutiques qui font le plus de revenu, vite — lien direct vers l'article Etsy.</p>
+        </div>
+        <div class="card">
+          <div class="search-row">
+            <input id="sp-q" type="text" placeholder="tag / niche — ex : dandys world" />
+            <select id="sp-sort" title="Trier les boutiques">
+              <option value="ratio" selected>Meilleur ratio (revenu / jour)</option>
+              <option value="revenue">Revenu total</option>
+              <option value="sales">Ventes</option>
+              <option value="age">Récent (jours ouverts)</option>
+              <option value="combo">Revenu récent (pondéré)</option>
+              <option value="views">Vues</option>
+            </select>
+            <label class="chk"><input type="checkbox" id="sp-nosales" /> inclure 0 vente</label>
+            <button id="sp-go" class="primary">Chercher</button>
+          </div>
+          <div class="search-row">
+            <input id="sp-url" type="text" placeholder="…ou colle une URL de boutique / listing Etsy à analyser" />
+            <button id="sp-url-go" class="ghost">Analyser l'URL</button>
+          </div>
+        </div>
+        <div id="sp-meta" class="muted small"></div>
+        <div id="sp-results" class="cards"></div>
+      </div>
+
+      <!-- =============== VUE LISTINGS TÉLÉCHARGÉS =============== -->
+      <div id="view-telecharges" class="view hidden">
+        <div class="view-head">
+          <h2>Analyse de listings concurrents téléchargés</h2>
+          <p class="muted">Récupérés via l'API Etsy (images, tags, description, matériaux, prix) — pour analyser, pas pour copier.</p>
+        </div>
+        <div class="card">
+          <div class="search-row">
+            <input id="dl-ref" type="text" placeholder="ID ou URL d'un listing Etsy à analyser" />
+            <button id="dl-go" class="primary">Analyser ce listing</button>
+            <button id="dl-refresh" class="ghost small-btn" title="Rafraîchir">↻</button>
+          </div>
+        </div>
+        <div class="dl-layout">
+          <div id="dl-list" class="dl-list"><p class="muted small">Chargement…</p></div>
+          <div id="dl-detail" class="dl-detail card"><p class="muted">Sélectionne un listing à gauche, ou télécharges-en un nouveau.</p></div>
+        </div>
+      </div>
+
+      <!-- =============== VUE NICHE TRACKER =============== -->
+      <div id="view-niches" class="view hidden">
+        <div class="view-head">
+          <h2>Niche Tracker</h2>
+          <p class="muted">Meilleures niches du moment, multi-univers : <b>peluches</b>, <b>figurines</b>,
+            <b>gaming / geek</b> (sorties de jeux, consoles, matériel électronique) et
+            <b>maison / mobilier / déco</b> — tendances validées par eRank.
+            Critère : recherches ≥ <b>2000</b> ET ≥ <b>5000&nbsp;%</b> de la concurrence.</p>
+        </div>
+        <div class="card">
+          <div class="nt-verticals-row">
+            <span class="nt-vlabel">Univers à explorer</span>
+            <div id="nt-verticals" class="nt-vchips"></div>
+            <button id="nt-v-all" type="button" class="xs ghost">Tout</button>
+            <button id="nt-v-none" type="button" class="xs ghost">Aucun</button>
+          </div>
+          <div class="nt-bar">
+            <div class="field small">
+              <label for="nt-max">Durée max</label>
+              <select id="nt-max">
+                <option value="120">2 min</option>
+                <option value="300" selected>5 min</option>
+                <option value="600">10 min</option>
+              </select>
+            </div>
+            <div class="field small">
+              <label for="nt-min">Recherches min</label>
+              <input id="nt-min" type="number" value="2000" min="0" step="100" />
+            </div>
+            <div class="field small">
+              <label for="nt-ratio">Ratio % vs concurrence</label>
+              <input id="nt-ratio" type="number" value="5000" min="0" step="100" />
+            </div>
+            <button id="nt-go" class="primary">Trouver la meilleure niche</button>
+            <button id="nt-stop" class="ghost small-btn hidden">■ Arrêter</button>
+          </div>
+        </div>
+
+        <div id="nt-saved" class="card nt-saved">
+          <div class="nt-saved-head">
+            <h3>⭐ Mes meilleures niches <span id="nt-saved-count" class="muted small"></span></h3>
+            <span class="muted small">Mémorisées = exclues des prochaines recherches.</span>
+          </div>
+          <div id="nt-saved-list" class="nt-saved-list"></div>
+        </div>
+
+        <div id="nt-progress" class="card hidden">
+          <div class="job-head">
+            <h3>Recherche en cours</h3>
+            <span id="nt-phase" class="badge">…</span>
+          </div>
+          <div class="pbar"><span id="nt-bar"></span></div>
+          <div class="pmeta">
+            <span id="nt-count" class="muted small"></span>
+            <span id="nt-elapsed" class="muted small"></span>
+          </div>
+          <div id="nt-sources" class="muted small"></div>
+        </div>
+        <div id="nt-results"></div>
+      </div>
+
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+{
+  "niches": [
+    {
+      "term": "off campus",
+      "saved_at": 1780344556.410625,
+      "last_month_searches": 6720,
+      "avg_searches": 561,
+      "etsy_competition": 121,
+      "ctr": 127.0,
+      "kd": 1.0,
+      "momentum": 6.65,
+      "total_est_revenue": 8616.34
+    },
+    {
+      "term": "project hail mary",
+      "saved_at": 1780344555.5977862,
+      "last_month_searches": 20820,
+      "avg_searches": 8211,
+      "etsy_competition": 259,
+      "ctr": 120.0,
+      "kd": 1.0,
+      "momentum": 5.93,
+      "total_est_revenue": 40591.97
+    },
+    {
+      "term": "hacky sack",
+      "saved_at": 1780344552.843012,
+      "last_month_searches": 20820,
+      "avg_searches": 1755,
+      "etsy_competition": 281,
+      "ctr": 97.0,
+      "kd": 1.0,
+      "momentum": 122.47,
+      "total_est_revenue": 8360.05
+    },
+    {
+      "term": "witch hat atelier",
+      "saved_at": 1780344551.930347,
+      "last_month_searches": 17740,
+      "avg_searches": 3756,
+      "etsy_competition": 242,
+      "ctr": 122.0,
+      "kd": 1.0,
+      "momentum": 11.59,
+      "total_est_revenue": 5504.93
+    }
+  ]
+}
