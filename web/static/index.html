@@ -334,7 +334,15 @@
 
           <div class="card">
             <h3>Coût de revient par produit</h3>
-            <p class="muted small">Ton prix d'achat / fabrication par article (AliExpress, matière…). Sans lui, le net est surestimé.</p>
+            <p class="muted small">Ton prix d'achat / fabrication par article (AliExpress, matière…). Sans lui, le net est surestimé.
+              Les produits vendus apparaissent automatiquement après synchro ; tu peux aussi en ajouter un à la main ici.</p>
+            <div class="fin-prod-form">
+              <input id="fp-lid" type="number" min="1" placeholder="ID du listing Etsy" title="Le numéro dans l'URL de l'annonce : etsy.com/listing/123456789/…" />
+              <input id="fp-title" type="text" placeholder="Nom du produit (optionnel)" />
+              <input id="fp-cost" type="number" step="0.01" min="0" placeholder="Coût unitaire" />
+              <button id="fp-add" class="ghost small-btn" type="button">＋ Ajouter</button>
+            </div>
+            <p class="hint">L'ID est dans l'URL de l'annonce — etsy.com/listing/<b>123456789</b>/… — ou dans le lien « Ouvrir sur Etsy » d'un brouillon créé par l'app.</p>
             <div id="fin-products" class="fin-products"></div>
           </div>
         </div>

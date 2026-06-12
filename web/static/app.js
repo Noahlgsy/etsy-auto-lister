@@ -2924,6 +2924,26 @@ async function finSaveCost(lid, tr) {
   } catch (e) { toast("Échec : " + e.message, true); }
 }
 
+// Ajout manuel d'un coût produit (avant la 1re vente — ID visible dans l'URL
+// de l'annonce). Les produits vendus arrivent automatiquement via la synchro.
+async function finAddProduct() {
+  const lid = $("#fp-lid").value.trim();
+  const cost = $("#fp-cost").value;
+  if (!lid || cost === "") { toast("ID du listing et coût unitaire requis.", true); return; }
+  try {
+    await api(`/api/finance/products/${enc(lid)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ unit_cost: Number(cost), title: $("#fp-title").value.trim() }),
+    });
+    $("#fp-lid").value = "";
+    $("#fp-title").value = "";
+    $("#fp-cost").value = "";
+    toast("Coût enregistré — net recalculé.");
+    await Promise.all([finLoadCosts(), finLoadSummary()]);
+  } catch (e) { toast("Échec : " + e.message, true); }
+}
+
 function finRenderAds(ads) {
   const box = $("#fin-ads-list");
   if (!ads.entries.length) {
@@ -2985,6 +3005,8 @@ function finInit() {
   });
   $("#fs-save").addEventListener("click", finSaveSettings);
   $("#ad-add").addEventListener("click", finAddAd);
+  $("#fp-add").addEventListener("click", finAddProduct);
+  $("#fp-cost").addEventListener("keydown", (e) => { if (e.key === "Enter") finAddProduct(); });
 
   // Délégation : déplier une commande / enregistrer son expédition.
   $("#fin-orders-list").addEventListener("click", (e) => {

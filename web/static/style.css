@@ -984,3 +984,9 @@ table.grid td.act .xs { margin-left: 6px; }
 
 @media (max-width: 1180px) { .fin-kpis { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 640px) { .fin-kpis { grid-template-columns: repeat(2, 1fr); } }
+
+/* Ajout manuel d'un coût produit */
+.fin-prod-form { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 2px; }
+.fin-prod-form #fp-lid { width: 180px; }
+.fin-prod-form #fp-title { flex: 1; min-width: 180px; }
+.fin-prod-form #fp-cost { width: 140px; }
