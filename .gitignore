@@ -31,6 +31,7 @@ data/easypic/
 data/finance.db
 data/finance.db-wal
 data/finance.db-shm
+data/listing_thumbs/
 
 # ── Claude Code local ───────────────────────────────────
 .claude/settings.local.json

@@ -105,6 +105,13 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT
 );
 
+-- Cache des vignettes produits (URL CDN Etsy résolue une fois par listing).
+CREATE TABLE IF NOT EXISTS listing_images (
+    listing_id  INTEGER PRIMARY KEY,
+    url         TEXT,
+    fetched_ts  INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS sync_state (
     shop_id         TEXT PRIMARY KEY,
     last_sync_ts    INTEGER,
@@ -198,6 +205,7 @@ def _receipt_row(r: dict, shop_id: str) -> tuple:
         items.append(
             {
                 "listing_id": t.get("listing_id"),
+                "listing_image_id": t.get("listing_image_id"),
                 "title": (t.get("title") or "")[:140],
                 "quantity": qty,
                 "price": _money(t.get("price")),
@@ -645,6 +653,105 @@ def set_shipping(receipt_id: int, fields: dict) -> dict:
         st = get_settings()
         costs = _product_cost_map(conn)
     return _compute(row, st, costs)
+
+
+# --------------------------------------------------------------------------- #
+# Vignettes produits (lecture seule Etsy, cache local)
+# --------------------------------------------------------------------------- #
+def _find_listing_image_id(conn: sqlite3.Connection, listing_id: int) -> int | None:
+    """Retrouve un listing_image_id dans les commandes déjà synchronisées."""
+    rows = conn.execute(
+        "SELECT raw_json FROM orders WHERE items_json LIKE ? LIMIT 5",
+        (f'%"listing_id": {listing_id}%',),
+    ).fetchall()
+    for r in rows:
+        try:
+            for t in json.loads(r["raw_json"]).get("transactions") or []:
+                if t.get("listing_id") == listing_id and t.get("listing_image_id"):
+                    return int(t["listing_image_id"])
+        except Exception:  # noqa: BLE001 — raw_json de démo ou incomplet
+            continue
+    return None
+
+
+def listing_image_url(listing_id: int) -> str | None:
+    """URL CDN de la vignette d'un listing (cache 1er appel, lecture seule).
+
+    Un échec est aussi mis en cache (url vide) et retenté au plus une fois
+    par jour, pour ne jamais marteler l'API Etsy depuis la liste de commandes.
+    """
+    listing_id = int(listing_id)
+    now = int(time.time())
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT url, fetched_ts FROM listing_images WHERE listing_id = ?",
+            (listing_id,),
+        ).fetchone()
+        if row is not None:
+            if row["url"]:
+                return row["url"]
+            if now - (row["fetched_ts"] or 0) < 86400:
+                return None
+        img_id = _find_listing_image_id(conn, listing_id)
+
+    url = None
+    try:
+        headers = get_api_headers()
+        if img_id:
+            resp = requests.get(
+                f"{ETSY_API_BASE}/listings/{listing_id}/images/{img_id}",
+                headers=headers, timeout=15,
+            )
+            if resp.status_code == 200:
+                d = resp.json()
+                url = d.get("url_170x135") or d.get("url_75x75") or d.get("url_570xN")
+        if not url:
+            resp = requests.get(
+                f"{ETSY_API_BASE}/listings/{listing_id}/images",
+                headers=headers, timeout=15,
+            )
+            if resp.status_code == 200:
+                results = resp.json().get("results") or []
+                if results:
+                    d = results[0]
+                    url = d.get("url_170x135") or d.get("url_75x75") or d.get("url_570xN")
+    except Exception:  # noqa: BLE001 — pas de creds / réseau : vignette absente
+        url = None
+
+    with _write_lock, _db() as conn:
+        conn.execute(
+            "INSERT INTO listing_images (listing_id, url, fetched_ts) VALUES (?, ?, ?) "
+            "ON CONFLICT(listing_id) DO UPDATE SET url = excluded.url, fetched_ts = excluded.fetched_ts",
+            (listing_id, url or "", now),
+        )
+    return url
+
+
+THUMBS_DIR = ROOT / "data" / "listing_thumbs"
+
+
+def listing_image_path(listing_id: int) -> Path | None:
+    """Vignette d'un listing servie depuis le cache disque local.
+
+    Téléchargée UNE fois depuis le CDN Etsy puis servie par l'app — pas de
+    redirection externe (le panneau de preview les bloque) ni de hotlink.
+    """
+    listing_id = int(listing_id)
+    path = THUMBS_DIR / f"{listing_id}.jpg"
+    if path.is_file():
+        return path
+    url = listing_image_url(listing_id)
+    if not url:
+        return None
+    try:
+        resp = requests.get(url, timeout=15)
+        if resp.status_code != 200 or not resp.content:
+            return None
+        THUMBS_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(resp.content)
+        return path
+    except Exception:  # noqa: BLE001 — réseau : vignette absente, pas d'erreur UI
+        return None
 
 
 # --------------------------------------------------------------------------- #

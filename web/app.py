@@ -1564,6 +1564,15 @@ def finance_products() -> list[dict]:
     return finance.products()
 
 
+@app.get("/api/finance/listing-image/{listing_id}")
+def finance_listing_image(listing_id: int):
+    """Vignette d'un listing, servie depuis le cache disque (résolue 1 fois)."""
+    path = finance.listing_image_path(listing_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Image introuvable.")
+    return FileResponse(path, media_type="image/jpeg")
+
+
 @app.put("/api/finance/products/{listing_id}")
 def finance_set_product_cost(listing_id: int, req: FinProductCostReq) -> dict:
     return finance.set_product_cost(listing_id, req.unit_cost, req.title)

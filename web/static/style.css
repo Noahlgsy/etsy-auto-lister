@@ -990,3 +990,14 @@ table.grid td.act .xs { margin-left: 6px; }
 .fin-prod-form #fp-lid { width: 180px; }
 .fin-prod-form #fp-title { flex: 1; min-width: 180px; }
 .fin-prod-form #fp-cost { width: 140px; }
+
+/* Vignettes produits (commandes + table des coûts) */
+.fin-o-thumb {
+  width: 36px; height: 36px; border-radius: 8px; object-fit: cover;
+  flex: none; background: var(--bg-2); border: 1px solid var(--line);
+}
+.fin-p-thumb {
+  width: 30px; height: 30px; border-radius: 6px; object-fit: cover;
+  vertical-align: middle; margin-right: 9px;
+  background: var(--bg-2); border: 1px solid var(--line);
+}

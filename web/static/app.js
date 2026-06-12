@@ -2802,6 +2802,11 @@ function finOrderRow(o) {
     <div class="fin-order-main" data-fin-toggle="${o.receipt_id}">
       <span class="fin-o-date">${date}</span>
       <span class="fin-o-flag" title="${escapeHtml(countryName(o.buyer_country))}">${flagEmoji(o.buyer_country)}</span>
+      ${(o.items || [])[0]?.listing_id
+        ? `<img class="fin-o-thumb" alt=""
+             src="/api/finance/listing-image/${o.items[0].listing_id}"
+             onerror="this.style.visibility='hidden'" />`
+        : ""}
       <span class="fin-o-items" title="${escapeHtml(itemsRaw)}">${escapeHtml(o.buyer_name || "")}${o.buyer_name ? " — " : ""}${escapeHtml(itemsRaw) || "—"}</span>
       <span class="fin-o-rev">${finMoney(o.revenue, cur)}</span>
       <span class="fin-o-net${o.net < 0 ? " neg" : ""}">${o.excluded ? "" : "net " + finMoney(o.net, cur)}</span>
@@ -2901,7 +2906,10 @@ function finRenderProducts(prods) {
     `<th class="num">Vendus</th><th class="num">Coût unitaire</th><th></th></tr></thead><tbody>` +
     prods.map((p) =>
       `<tr data-lid="${p.listing_id}">` +
-      `<td class="fin-ptitle" title="${escapeHtml(p.title)}">${escapeHtml(p.title || `Listing ${p.listing_id}`)}</td>` +
+      `<td class="fin-ptitle" title="${escapeHtml(p.title)}">` +
+      `<img class="fin-p-thumb" alt="" src="/api/finance/listing-image/${p.listing_id}"` +
+      ` onerror="this.style.visibility='hidden'" />` +
+      `${escapeHtml(p.title || `Listing ${p.listing_id}`)}</td>` +
       `<td class="num">${p.sold_qty}</td>` +
       `<td class="num"><input class="fin-cost-input" type="number" step="0.01" min="0"` +
       ` value="${p.unit_cost != null ? p.unit_cost : ""}" placeholder="—" /></td>` +
