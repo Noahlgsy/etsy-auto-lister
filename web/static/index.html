@@ -18,6 +18,7 @@
 
     <nav class="nav">
       <button class="nav-btn active" data-view="atelier">Atelier</button>
+      <button class="nav-btn" data-view="ventes">Ventes</button>
       <button class="nav-btn" data-view="easypic">Easy picture</button>
       <button class="nav-btn" data-view="tags">Tag Searcher</button>
       <button class="nav-btn" data-view="concurrents">Concurrents</button>
@@ -203,6 +204,140 @@
         </div>
 
         <div id="result" class="result hidden"></div>
+      </div>
+
+      <!-- =============== VUE VENTES & RÉSULTAT NET =============== -->
+      <div id="view-ventes" class="view hidden">
+        <div class="view-head">
+          <h2>Ventes &amp; résultat net</h2>
+          <p class="muted">Commandes Etsy synchronisées, coûts réels, tendances par heure / jour / pays.
+            Le suivi d'expédition est <b>local</b> — rien n'est écrit sur Etsy.</p>
+        </div>
+
+        <div class="card fin-toolbar">
+          <div class="fin-tabs">
+            <button class="fin-tab active" data-fintab="dash" type="button">Tableau de bord</button>
+            <button class="fin-tab" data-fintab="orders" type="button">Commandes <span id="fin-toship" class="mini-badge hidden"></span></button>
+            <button class="fin-tab" data-fintab="costs" type="button">Coûts &amp; frais</button>
+          </div>
+          <div class="fin-filters">
+            <select id="fin-days" title="Période analysée">
+              <option value="7">7 jours</option>
+              <option value="30" selected>30 jours</option>
+              <option value="90">90 jours</option>
+              <option value="180">6 mois</option>
+              <option value="365">1 an</option>
+            </select>
+            <select id="fin-country" title="Filtrer par pays d'achat">
+              <option value="">🌍 Tous pays</option>
+            </select>
+            <button id="fin-sync" class="primary small-btn" title="Récupérer les dernières commandes depuis Etsy">⟳ Synchroniser</button>
+          </div>
+        </div>
+        <p id="fin-substatus" class="muted small fin-substatus"></p>
+
+        <!-- Sous-vue : tableau de bord -->
+        <div id="fin-dash">
+          <div id="fin-kpis" class="fin-kpis"></div>
+          <div class="grid-2 fin-grid">
+            <div class="card">
+              <h3>Par jour <span class="muted small">CA (barres) · net (ligne)</span></h3>
+              <div id="fin-chart-days" class="fin-chart"></div>
+            </div>
+            <div class="card">
+              <h3>Par heure de la journée <span class="muted small">commandes · heure de Paris</span></h3>
+              <div id="fin-chart-hours" class="fin-chart"></div>
+            </div>
+          </div>
+          <div class="grid-2 fin-grid">
+            <div class="card">
+              <h3>Par jour de semaine <span class="muted small">commandes</span></h3>
+              <div id="fin-chart-weekdays" class="fin-chart"></div>
+            </div>
+            <div class="card">
+              <h3>Par pays <span class="muted small">clique pour filtrer</span></h3>
+              <div id="fin-countries"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sous-vue : commandes & expéditions -->
+        <div id="fin-orders" class="hidden">
+          <div class="card">
+            <div class="fin-orders-head">
+              <div class="fin-chips">
+                <button class="fin-chip active" data-finship="all" type="button">Toutes</button>
+                <button class="fin-chip" data-finship="to_ship" type="button">📦 À expédier</button>
+                <button class="fin-chip" data-finship="shipped" type="button">✓ Expédiées</button>
+              </div>
+              <span id="fin-orders-count" class="muted small"></span>
+            </div>
+            <div id="fin-orders-list" class="fin-orders-list"></div>
+            <div class="row-end">
+              <button id="fin-more" class="ghost small-btn hidden" type="button">Charger plus</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sous-vue : coûts & frais -->
+        <div id="fin-costs" class="hidden">
+          <div class="grid-2 fin-grid">
+            <div class="card">
+              <h3>Frais Etsy estimés</h3>
+              <p class="muted small">Appliqués à chaque vente pour calculer le net. Ce sont des estimations — la facture Etsy fait foi.</p>
+              <div class="two">
+                <div class="field">
+                  <label for="fs-tx">Commission transaction (%)</label>
+                  <input id="fs-tx" type="number" step="0.1" min="0" />
+                </div>
+                <div class="field">
+                  <label for="fs-pay">Frais de paiement (%)</label>
+                  <input id="fs-pay" type="number" step="0.1" min="0" />
+                </div>
+              </div>
+              <div class="two">
+                <div class="field">
+                  <label for="fs-fixed">Paiement : fixe / commande</label>
+                  <input id="fs-fixed" type="number" step="0.01" min="0" />
+                </div>
+                <div class="field">
+                  <label for="fs-listing">Mise en ligne / article</label>
+                  <input id="fs-listing" type="number" step="0.01" min="0" />
+                </div>
+              </div>
+              <div class="two">
+                <div class="field">
+                  <label for="fs-vat">TVA sur les frais (%)</label>
+                  <input id="fs-vat" type="number" step="0.1" min="0" />
+                </div>
+                <div class="field">
+                  <label for="fs-ship">Port payé par défaut</label>
+                  <input id="fs-ship" type="number" step="0.01" min="0" />
+                </div>
+              </div>
+              <div class="row-end">
+                <button id="fs-save" class="primary small-btn" type="button">Enregistrer</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <h3>Dépenses pub (Etsy Ads)</h3>
+              <p class="muted small">Saisies par jour, déduites du net de la période. Globales (toutes boutiques).</p>
+              <div class="fin-ad-form">
+                <input id="ad-day" type="date" />
+                <input id="ad-amount" type="number" step="0.01" min="0" placeholder="Montant" />
+                <button id="ad-add" class="ghost small-btn" type="button">Ajouter</button>
+              </div>
+              <div id="fin-ads-list" class="fin-ads-list"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Coût de revient par produit</h3>
+            <p class="muted small">Ton prix d'achat / fabrication par article (AliExpress, matière…). Sans lui, le net est surestimé.</p>
+            <div id="fin-products" class="fin-products"></div>
+          </div>
+        </div>
       </div>
 
       <!-- =============== VUE EASY PICTURE =============== -->

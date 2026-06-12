@@ -169,7 +169,7 @@ function formatEta(seconds) {
 }
 
 // ---- views ----------------------------------------------------------------
-const ALL_VIEWS = ["atelier", "produit", "easypic", "reglages", "tags", "concurrents", "telecharges", "niches"];
+const ALL_VIEWS = ["atelier", "produit", "ventes", "easypic", "reglages", "tags", "concurrents", "telecharges", "niches"];
 function showView(name) {
   ALL_VIEWS.forEach((v) => {
     const el = $(`#view-${v}`);
@@ -183,6 +183,7 @@ function showView(name) {
     fillConfigForm();
     checkServices();
   }
+  if (name === "ventes") finOpen();
   if (name === "easypic") loadEasypic();
   if (name === "telecharges") loadDownloaded();
   if (name === "niches") { loadVerticals(); loadSavedNiches(); }
@@ -2499,6 +2500,536 @@ async function removeSavedNiche(term) {
 }
 
 // ---- init -----------------------------------------------------------------
+// ===========================================================================
+//  Ventes & résultat net — commandes Etsy synchronisées, coûts, tendances.
+//  Le suivi d'expédition (statut, n° de suivi) est 100 % LOCAL : rien n'est
+//  jamais écrit sur Etsy depuis cet onglet.
+// ===========================================================================
+const finState = {
+  days: 30,
+  country: "",
+  ship: "all",      // filtre commandes : all | to_ship | shipped
+  tab: "dash",      // sous-onglet : dash | orders | costs
+  offset: 0,
+  limit: 50,
+  total: 0,
+  summary: null,
+  trends: null,
+};
+
+function finShopQ() {
+  return state.activeShop ? `&shop=${enc(state.activeShop)}` : "";
+}
+
+function finMoney(v, cur) {
+  if (v == null || !isFinite(Number(v))) return "—";
+  const sym = (cur || "EUR") === "EUR" ? "€" : cur === "GBP" ? "£" : "$";
+  return Number(v).toLocaleString("fr-FR", {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  }) + " " + sym;
+}
+
+function flagEmoji(iso) {
+  if (!iso || iso.length !== 2 || /[^A-Z]/.test(iso)) return "🌍";
+  return String.fromCodePoint(...[...iso].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
+}
+
+const REGION_FR = (typeof Intl !== "undefined" && Intl.DisplayNames)
+  ? new Intl.DisplayNames(["fr"], { type: "region" }) : null;
+function countryName(iso) {
+  if (!iso || iso === "??") return "Inconnu";
+  try { return (REGION_FR && REGION_FR.of(iso)) || iso; } catch (_) { return iso; }
+}
+
+function finAgo(ts) {
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 90) return "à l'instant";
+  if (s < 3600) return `il y a ${Math.round(s / 60)} min`;
+  if (s < 86400) return `il y a ${Math.round(s / 3600)} h`;
+  return `il y a ${Math.round(s / 86400)} j`;
+}
+
+function finOpen() { finRefresh(); }
+
+async function finRefresh(statusToo = true) {
+  if (statusToo) finStatusLine();
+  await Promise.all([finLoadSummary(), finLoadTrends()]);
+  if (finState.tab === "orders") await finLoadOrders(true);
+  if (finState.tab === "costs") await finLoadCosts();
+}
+
+async function finStatusLine() {
+  const el = $("#fin-substatus");
+  try {
+    const st = await api("/api/finance/status");
+    if (!st.shops.length) {
+      el.textContent = st.total_orders
+        ? `Aucune boutique Etsy configurée — affichage des ${st.total_orders} commandes locales (démo ?).`
+        : "Aucune boutique Etsy configurée : renseigne .env puis lance « python -m src.auth », et re-synchronise.";
+      return;
+    }
+    el.textContent = st.shops.map((s) =>
+      `${s.label} : ${s.orders} commande${s.orders > 1 ? "s" : ""}` +
+      (s.last_sync_ts ? ` · synchro ${finAgo(s.last_sync_ts)}` : " · jamais synchronisée")
+    ).join("  —  ");
+  } catch (_) { el.textContent = ""; }
+}
+
+function finShowTab(tab) {
+  finState.tab = tab;
+  $$(".fin-tab").forEach((b) => b.classList.toggle("active", b.dataset.fintab === tab));
+  $("#fin-dash").classList.toggle("hidden", tab !== "dash");
+  $("#fin-orders").classList.toggle("hidden", tab !== "orders");
+  $("#fin-costs").classList.toggle("hidden", tab !== "costs");
+  if (tab === "orders") finLoadOrders(true);
+  if (tab === "costs") finLoadCosts();
+}
+
+// ---- synchro Etsy ----------------------------------------------------------
+async function finSync() {
+  const btn = $("#fin-sync");
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spin"></span>Synchro…`;
+  try {
+    const d = await api(`/api/finance/sync${state.activeShop ? `?shop=${enc(state.activeShop)}` : ""}`,
+      { method: "POST" });
+    toast(`${d.synced} commande(s) synchronisée(s) depuis Etsy.`);
+    await finRefresh();
+  } catch (e) {
+    toast("Synchro : " + e.message, true);
+    $("#fin-substatus").textContent = e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+// ---- KPIs ------------------------------------------------------------------
+async function finLoadSummary() {
+  try {
+    const d = await api(`/api/finance/summary?days=${finState.days}${finShopQ()}` +
+      (finState.country ? `&country=${enc(finState.country)}` : ""));
+    finState.summary = d;
+    finRenderKpis();
+    const b = $("#fin-toship");
+    b.textContent = d.to_ship;
+    b.classList.toggle("hidden", !d.to_ship);
+  } catch (e) { toast("Ventes : " + e.message, true); }
+}
+
+function finDelta(cur, prev) {
+  if (!prev) return "";
+  const pct = ((cur - prev) / Math.abs(prev)) * 100;
+  if (!isFinite(pct) || Math.abs(pct) < 0.5) return "";
+  const up = pct >= 0;
+  return ` <span class="fin-delta ${up ? "up" : "down"}">${up ? "▲" : "▼"} ${Math.abs(pct).toFixed(0)} %</span>`;
+}
+
+function finRenderKpis() {
+  const s = finState.summary;
+  if (!s) return;
+  const cur = s.currency;
+  const cards = [
+    { label: "Chiffre d'affaires", value: finMoney(s.revenue, cur),
+      sub: `${s.orders} cmd · ${s.items} articles${finDelta(s.revenue, s.prev.revenue)}` },
+    { label: "Frais Etsy", value: "− " + finMoney(s.fees, cur),
+      sub: "commission · paiement · listing" },
+    { label: "Coût produits", value: "− " + finMoney(s.cogs, cur),
+      sub: s.cogs_missing_count
+        ? `⚠ ${s.cogs_missing_count} cmd sans coût saisi`
+        : "coûts de revient saisis",
+      warn: !!s.cogs_missing_count },
+    { label: "Port payé", value: "− " + finMoney(s.shipping_cost, cur),
+      sub: "frais d'envoi réels" },
+    { label: "Pub (Etsy Ads)", value: "− " + finMoney(s.ads, cur),
+      sub: "dépenses saisies" },
+    { label: "Résultat net", value: finMoney(s.net, cur),
+      sub: (s.margin_pct != null ? `marge ${s.margin_pct} %` : "—") + finDelta(s.net, s.prev.net),
+      hero: true, neg: s.net < 0 },
+  ];
+  $("#fin-kpis").innerHTML = cards.map((c) =>
+    `<div class="fin-kpi${c.hero ? " hero" : ""}${c.neg ? " neg" : ""}${c.warn ? " warn" : ""}"` +
+    `${c.warn ? ' title="Clique pour saisir les coûts produits"' : ""}>` +
+    `<span class="fin-kpi-label">${c.label}</span>` +
+    `<span class="fin-kpi-value">${c.value}</span>` +
+    `<span class="fin-kpi-sub">${c.sub || ""}</span></div>`
+  ).join("");
+}
+
+// ---- tendances (graphes SVG) ----------------------------------------------
+async function finLoadTrends() {
+  try {
+    const d = await api(`/api/finance/trends?days=${finState.days}${finShopQ()}` +
+      (finState.country ? `&country=${enc(finState.country)}` : ""));
+    finState.trends = d;
+    finFillCountrySelect(d.by_country);
+    finRenderCharts();
+  } catch (e) { toast("Tendances : " + e.message, true); }
+}
+
+function finFillCountrySelect(byCountry) {
+  const sel = $("#fin-country");
+  sel.innerHTML = `<option value="">🌍 Tous pays</option>` + byCountry.map((c) =>
+    `<option value="${c.country}">${flagEmoji(c.country)} ${escapeHtml(countryName(c.country))} (${c.orders})</option>`
+  ).join("");
+  sel.value = finState.country;
+}
+
+function finRenderCharts() {
+  const t = finState.trends;
+  if (!t) return;
+  const cur = (finState.summary && finState.summary.currency) || "EUR";
+  $("#fin-chart-days").innerHTML = finChartDays(t.by_day, cur);
+  $("#fin-chart-hours").innerHTML = finBars(
+    t.by_hour.map((h) => ({
+      label: `${h.hour}h`, value: h.orders,
+      title: `${h.hour} h — ${h.orders} commande(s) · CA ${finMoney(h.revenue, cur)}`,
+    })), { maxLabels: 12 });
+  const WD = ["lun", "mar", "mer", "jeu", "ven", "sam", "dim"];
+  $("#fin-chart-weekdays").innerHTML = finBars(
+    t.by_weekday.map((w) => ({
+      label: WD[w.weekday], value: w.orders,
+      title: `${WD[w.weekday]} — ${w.orders} commande(s) · CA ${finMoney(w.revenue, cur)}`,
+    })), { maxLabels: 7 });
+  $("#fin-countries").innerHTML = finCountryTable(t.by_country, cur);
+}
+
+// Barres génériques (heures, jours de semaine). rows: [{label, value, title}].
+function finBars(rows, opts = {}) {
+  const W = 560, H = 150, P = { t: 10, r: 6, b: 20, l: 6 };
+  const iw = W - P.l - P.r, ih = H - P.t - P.b;
+  const max = Math.max(1, ...rows.map((r) => r.value));
+  const bw = iw / rows.length;
+  const step = Math.max(1, Math.ceil(rows.length / (opts.maxLabels || 8)));
+  let bars = "", labels = "";
+  rows.forEach((r, i) => {
+    const h = (r.value / max) * ih;
+    const x = P.l + i * bw;
+    bars += `<rect x="${(x + bw * 0.18).toFixed(1)}" y="${(P.t + ih - h).toFixed(1)}"` +
+      ` width="${(bw * 0.64).toFixed(1)}" height="${Math.max(h, r.value ? 2 : 0.5).toFixed(1)}"` +
+      ` rx="2" class="fin-bar${r.value ? "" : " zero"}"><title>${escapeHtml(r.title)}</title></rect>`;
+    if (i % step === 0 || i === rows.length - 1) {
+      labels += `<text x="${(x + bw / 2).toFixed(1)}" y="${H - 5}" class="fin-xlab">${escapeHtml(r.label)}</text>`;
+    }
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" class="fin-svg">` +
+    `<line x1="${P.l}" y1="${P.t + ih}" x2="${W - P.r}" y2="${P.t + ih}" class="fin-axis"/>` +
+    bars + labels + `</svg>`;
+}
+
+// Série temporelle : barres = CA, ligne = net (même échelle).
+function finChartDays(rows, cur) {
+  if (!rows.length) return `<p class="muted small">Aucune donnée.</p>`;
+  const W = 560, H = 170, P = { t: 12, r: 8, b: 24, l: 8 };
+  const iw = W - P.l - P.r, ih = H - P.t - P.b;
+  const lo = Math.min(0, ...rows.map((r) => r.net));
+  const hi = Math.max(1, ...rows.map((r) => Math.max(r.revenue, r.net)));
+  const y = (v) => P.t + ih - ((v - lo) / (hi - lo)) * ih;
+  const bw = iw / rows.length;
+  const y0 = y(0);
+  let bars = "";
+  const pts = [];
+  rows.forEach((r, i) => {
+    const x = P.l + i * bw;
+    const by = y(r.revenue);
+    const title = `${r.day} · CA ${finMoney(r.revenue, cur)} · net ${finMoney(r.net, cur)} · ${r.orders} cmd`;
+    bars += `<rect x="${(x + bw * 0.15).toFixed(1)}" y="${Math.min(by, y0).toFixed(1)}"` +
+      ` width="${(bw * 0.7).toFixed(1)}" height="${Math.max(Math.abs(y0 - by), r.revenue ? 2 : 0.5).toFixed(1)}"` +
+      ` rx="2" class="fin-bar${r.revenue ? "" : " zero"}"><title>${escapeHtml(title)}</title></rect>`;
+    pts.push(`${(x + bw / 2).toFixed(1)},${y(r.net).toFixed(1)}`);
+  });
+  const step = Math.max(1, Math.round(rows.length / 6));
+  let labels = "";
+  rows.forEach((r, i) => {
+    if (i % step !== 0 && i !== rows.length - 1) return;
+    labels += `<text x="${(P.l + i * bw + bw / 2).toFixed(1)}" y="${H - 6}" class="fin-xlab">` +
+      `${r.day.slice(8)}/${r.day.slice(5, 7)}</text>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" class="fin-svg">` +
+    `<line x1="${P.l}" y1="${y0.toFixed(1)}" x2="${W - P.r}" y2="${y0.toFixed(1)}" class="fin-axis"/>` +
+    bars + `<polyline points="${pts.join(" ")}" class="fin-netline"/>` + labels + `</svg>`;
+}
+
+function finCountryTable(rows, cur) {
+  if (!rows.length) return `<p class="muted small">Aucune vente sur la période.</p>`;
+  const max = Math.max(1, ...rows.map((r) => r.revenue));
+  return `<table class="fin-table"><thead><tr><th>Pays</th><th></th>` +
+    `<th class="num">Cmd</th><th class="num">CA</th><th class="num">Net</th></tr></thead><tbody>` +
+    rows.map((r) =>
+      `<tr data-country="${r.country}" class="${finState.country === r.country ? "sel" : ""}">` +
+      `<td class="fin-cname">${flagEmoji(r.country)} ${escapeHtml(countryName(r.country))}</td>` +
+      `<td class="bar-cell"><span class="fin-cbar" style="width:${((r.revenue / max) * 100).toFixed(1)}%"></span></td>` +
+      `<td class="num">${r.orders}</td>` +
+      `<td class="num">${finMoney(r.revenue, cur)}</td>` +
+      `<td class="num${r.net < 0 ? " neg" : ""}">${finMoney(r.net, cur)}</td></tr>`
+    ).join("") + `</tbody></table>`;
+}
+
+// ---- commandes & expéditions ------------------------------------------------
+async function finLoadOrders(reset = false) {
+  if (reset) finState.offset = 0;
+  try {
+    const d = await api(`/api/finance/orders?days=${finState.days}${finShopQ()}` +
+      (finState.country ? `&country=${enc(finState.country)}` : "") +
+      `&ship=${finState.ship}&limit=${finState.limit}&offset=${finState.offset}`);
+    finState.total = d.total;
+    const html = d.orders.map(finOrderRow).join("") ||
+      `<p class="muted">Aucune commande${finState.ship === "to_ship" ? " à expédier" : ""} sur la période.</p>`;
+    const box = $("#fin-orders-list");
+    if (reset) box.innerHTML = html;
+    else box.insertAdjacentHTML("beforeend", html);
+    $("#fin-orders-count").textContent =
+      `${d.total} commande${d.total > 1 ? "s" : ""} · ${d.to_ship} à expédier (toutes périodes)`;
+    $("#fin-more").classList.toggle("hidden", finState.offset + finState.limit >= d.total);
+  } catch (e) { toast("Commandes : " + e.message, true); }
+}
+
+function finOrderRow(o) {
+  const cur = o.currency;
+  const date = new Date(o.created_ts * 1000).toLocaleString("fr-FR", {
+    day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
+  });
+  const itemsRaw = (o.items || []).map((it) =>
+    (it.quantity > 1 ? `${it.quantity} × ` : "") + (it.title || `Listing ${it.listing_id}`)
+  ).join(" · ");
+  const shipChip = o.excluded
+    ? `<span class="fin-ship-chip excl">✕ ${escapeHtml(o.status)}</span>`
+    : o.shipped
+      ? `<span class="fin-ship-chip ok">✓ Expédiée</span>`
+      : `<span class="fin-ship-chip todo">📦 À expédier</span>`;
+  return `<div class="fin-order${o.excluded ? " excluded" : ""}" data-rid="${o.receipt_id}">
+    <div class="fin-order-main" data-fin-toggle="${o.receipt_id}">
+      <span class="fin-o-date">${date}</span>
+      <span class="fin-o-flag" title="${escapeHtml(countryName(o.buyer_country))}">${flagEmoji(o.buyer_country)}</span>
+      <span class="fin-o-items" title="${escapeHtml(itemsRaw)}">${escapeHtml(o.buyer_name || "")}${o.buyer_name ? " — " : ""}${escapeHtml(itemsRaw) || "—"}</span>
+      <span class="fin-o-rev">${finMoney(o.revenue, cur)}</span>
+      <span class="fin-o-net${o.net < 0 ? " neg" : ""}">${o.excluded ? "" : "net " + finMoney(o.net, cur)}</span>
+      ${shipChip}
+    </div>
+    <div class="fin-order-detail hidden" id="fin-od-${o.receipt_id}">
+      <p class="muted small fin-od-breakdown">
+        CA ${finMoney(o.revenue, cur)} − frais ${finMoney(o.fees, cur)} − produit ${finMoney(o.cogs, cur)}${o.cogs_missing ? " ⚠" : ""}
+        − port ${finMoney(o.ship_cost, cur)} = <b>net ${finMoney(o.net, cur)}</b>${o.is_shipped_etsy ? " · marquée expédiée côté Etsy" : ""}
+      </p>
+      <div class="fin-od-ship">
+        <label class="switch">
+          <input type="checkbox" class="fin-shipped" ${o.shipped ? "checked" : ""} />
+          <span class="track"></span><span class="switch-label">Colis envoyé</span>
+        </label>
+        <input class="fin-tracking" type="text" placeholder="N° de suivi" value="${escapeHtml(o.tracking_number || "")}" />
+        <input class="fin-carrier" type="text" placeholder="Transporteur (Colissimo…)" value="${escapeHtml(o.carrier || "")}" />
+        <input class="fin-shipcost" type="number" step="0.01" min="0" placeholder="Port payé"
+               title="Coût d'envoi réel de CETTE commande — vide = défaut des réglages"
+               value="${o.shipping_cost != null ? o.shipping_cost : ""}" />
+        <button class="primary small-btn fin-save-ship" data-rid="${o.receipt_id}" type="button">Enregistrer</button>
+      </div>
+      ${o.shipped && o.shipped_at
+        ? `<p class="muted small">Expédiée le ${new Date(o.shipped_at * 1000).toLocaleDateString("fr-FR")}${o.tracking_number ? " · " + escapeHtml(o.tracking_number) : ""} <i>(suivi local, rien n'est envoyé à Etsy)</i></p>`
+        : ""}
+    </div>
+  </div>`;
+}
+
+async function finSaveShip(rid) {
+  const od = $(`#fin-od-${rid}`);
+  if (!od) return;
+  const sc = od.querySelector(".fin-shipcost").value;
+  const body = {
+    shipped: od.querySelector(".fin-shipped").checked,
+    tracking_number: od.querySelector(".fin-tracking").value.trim(),
+    carrier: od.querySelector(".fin-carrier").value.trim(),
+    shipping_cost: sc === "" ? null : Number(sc),
+  };
+  try {
+    await api(`/api/finance/orders/${rid}/shipping`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    toast("Expédition enregistrée (suivi local).");
+    await Promise.all([finLoadOrders(true), finLoadSummary()]);
+  } catch (e) { toast("Échec : " + e.message, true); }
+}
+
+// ---- coûts & frais -----------------------------------------------------------
+async function finLoadCosts() {
+  try {
+    const [settings, prods, ads] = await Promise.all([
+      api("/api/finance/settings"),
+      api("/api/finance/products"),
+      api("/api/finance/ads?days=90"),
+    ]);
+    $("#fs-tx").value = settings.transaction_fee_pct;
+    $("#fs-pay").value = settings.payment_fee_pct;
+    $("#fs-fixed").value = settings.payment_fee_fixed;
+    $("#fs-listing").value = settings.listing_fee;
+    $("#fs-vat").value = settings.fee_vat_pct;
+    $("#fs-ship").value = settings.default_shipping_cost;
+    finRenderProducts(prods);
+    finRenderAds(ads);
+  } catch (e) { toast("Coûts : " + e.message, true); }
+}
+
+async function finSaveSettings() {
+  const body = {
+    transaction_fee_pct: Number($("#fs-tx").value),
+    payment_fee_pct: Number($("#fs-pay").value),
+    payment_fee_fixed: Number($("#fs-fixed").value),
+    listing_fee: Number($("#fs-listing").value),
+    fee_vat_pct: Number($("#fs-vat").value),
+    default_shipping_cost: Number($("#fs-ship").value),
+  };
+  try {
+    await api("/api/finance/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    toast("Frais enregistrés — net recalculé.");
+    await Promise.all([finLoadSummary(), finLoadTrends()]);
+  } catch (e) { toast("Échec : " + e.message, true); }
+}
+
+function finRenderProducts(prods) {
+  const box = $("#fin-products");
+  if (!prods.length) {
+    box.innerHTML = `<p class="muted">Aucun produit vendu pour l'instant — synchronise d'abord tes commandes.</p>`;
+    return;
+  }
+  box.innerHTML = `<table class="fin-table"><thead><tr><th>Produit</th>` +
+    `<th class="num">Vendus</th><th class="num">Coût unitaire</th><th></th></tr></thead><tbody>` +
+    prods.map((p) =>
+      `<tr data-lid="${p.listing_id}">` +
+      `<td class="fin-ptitle" title="${escapeHtml(p.title)}">${escapeHtml(p.title || `Listing ${p.listing_id}`)}</td>` +
+      `<td class="num">${p.sold_qty}</td>` +
+      `<td class="num"><input class="fin-cost-input" type="number" step="0.01" min="0"` +
+      ` value="${p.unit_cost != null ? p.unit_cost : ""}" placeholder="—" /></td>` +
+      `<td class="fin-cost-cell"><button class="ghost small-btn fin-cost-save" data-lid="${p.listing_id}" type="button">OK</button>` +
+      `${p.has_cost ? "" : ` <span class="fin-misscost" title="Sans coût saisi, le net est surestimé">⚠</span>`}</td></tr>`
+    ).join("") + `</tbody></table>`;
+}
+
+async function finSaveCost(lid, tr) {
+  const input = tr.querySelector(".fin-cost-input");
+  if (input.value === "") { toast("Entre un coût unitaire.", true); return; }
+  try {
+    await api(`/api/finance/products/${lid}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ unit_cost: Number(input.value), title: tr.querySelector(".fin-ptitle").title }),
+    });
+    toast("Coût enregistré — net recalculé.");
+    await Promise.all([finLoadCosts(), finLoadSummary()]);
+  } catch (e) { toast("Échec : " + e.message, true); }
+}
+
+function finRenderAds(ads) {
+  const box = $("#fin-ads-list");
+  if (!ads.entries.length) {
+    box.innerHTML = `<p class="muted small">Aucune dépense saisie (90 derniers jours).</p>`;
+    return;
+  }
+  box.innerHTML = ads.entries.map((e) =>
+    `<div class="fin-ad-row"><span>${new Date(e.day + "T00:00:00").toLocaleDateString("fr-FR")}</span>` +
+    `<span class="num">${finMoney(e.amount, "EUR")}</span>` +
+    `<button class="icon-btn fin-ad-del" data-day="${e.day}" title="Supprimer" type="button">✕</button></div>`
+  ).join("") +
+    `<div class="fin-ad-row total"><span>Total 90 j</span><span class="num">${finMoney(ads.total, "EUR")}</span><span></span></div>`;
+}
+
+async function finAddAd() {
+  const day = $("#ad-day").value;
+  const amount = $("#ad-amount").value;
+  if (!day || amount === "") { toast("Date et montant requis.", true); return; }
+  try {
+    await api("/api/finance/ads", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ day, amount: Number(amount) }),
+    });
+    $("#ad-amount").value = "";
+    toast("Dépense pub enregistrée.");
+    await Promise.all([finLoadCosts(), finLoadSummary(), finLoadTrends()]);
+  } catch (e) { toast("Échec : " + e.message, true); }
+}
+
+async function finDelAd(day) {
+  try {
+    await api(`/api/finance/ads/${enc(day)}`, { method: "DELETE" });
+    await Promise.all([finLoadCosts(), finLoadSummary()]);
+  } catch (e) { toast("Échec : " + e.message, true); }
+}
+
+function finInit() {
+  $("#fin-sync").addEventListener("click", finSync);
+  $("#fin-days").addEventListener("change", () => {
+    finState.days = Number($("#fin-days").value);
+    finRefresh(false);
+  });
+  $("#fin-country").addEventListener("change", () => {
+    finState.country = $("#fin-country").value;
+    finRefresh(false);
+  });
+  $$(".fin-tab").forEach((b) =>
+    b.addEventListener("click", () => finShowTab(b.dataset.fintab)));
+  $$(".fin-chip").forEach((b) =>
+    b.addEventListener("click", () => {
+      finState.ship = b.dataset.finship;
+      $$(".fin-chip").forEach((c) => c.classList.toggle("active", c === b));
+      finLoadOrders(true);
+    }));
+  $("#fin-more").addEventListener("click", () => {
+    finState.offset += finState.limit;
+    finLoadOrders(false);
+  });
+  $("#fs-save").addEventListener("click", finSaveSettings);
+  $("#ad-add").addEventListener("click", finAddAd);
+
+  // Délégation : déplier une commande / enregistrer son expédition.
+  $("#fin-orders-list").addEventListener("click", (e) => {
+    const save = e.target.closest(".fin-save-ship");
+    if (save) { finSaveShip(save.dataset.rid); return; }
+    if (e.target.closest("input, button, label, .switch")) return;
+    const main = e.target.closest(".fin-order-main");
+    if (main) $(`#fin-od-${main.dataset.finToggle}`)?.classList.toggle("hidden");
+  });
+
+  // Délégation : coûts produits (bouton OK ou touche Entrée).
+  $("#fin-products").addEventListener("click", (e) => {
+    const btn = e.target.closest(".fin-cost-save");
+    if (btn) finSaveCost(btn.dataset.lid, btn.closest("tr"));
+  });
+  $("#fin-products").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.classList.contains("fin-cost-input")) {
+      const tr = e.target.closest("tr");
+      finSaveCost(tr.dataset.lid, tr);
+    }
+  });
+
+  $("#fin-ads-list").addEventListener("click", (e) => {
+    const del = e.target.closest(".fin-ad-del");
+    if (del) finDelAd(del.dataset.day);
+  });
+
+  // Clic sur un pays = filtre (re-clic = enlève le filtre).
+  $("#fin-countries").addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-country]");
+    if (!tr) return;
+    finState.country = finState.country === tr.dataset.country ? "" : tr.dataset.country;
+    $("#fin-country").value = finState.country;
+    finRefresh(false);
+  });
+
+  // KPI « coût produits » avec coûts manquants → ouvre l'onglet Coûts.
+  $("#fin-kpis").addEventListener("click", (e) => {
+    if (e.target.closest(".fin-kpi.warn")) finShowTab("costs");
+  });
+
+  const adDay = $("#ad-day");
+  if (adDay) adDay.valueAsDate = new Date();
+}
+
 function wireDropzone() {
   const dz = $("#dropzone");
   const fi = $("#file-input");
@@ -2548,6 +3079,9 @@ async function init() {
 
   // sidebar
   $("#refresh-folders").addEventListener("click", loadFolders);
+
+  // ventes & résultat net
+  finInit();
 
   // atelier
   wireDropzone();

@@ -61,7 +61,7 @@ from src.vision import IMAGE_MEDIA_TYPES, analyze_product_folder
 from src import shops
 from src.shops import use_shop
 
-from . import competitors, easypic, jobs, niche, niche_tracker
+from . import competitors, easypic, finance, jobs, niche, niche_tracker
 
 ROOT = Path(__file__).resolve().parent.parent          # etsy-auto-lister/
 FLOW_DIR = ROOT.parent / "flow-automation"             # Google Flow automation
@@ -80,6 +80,14 @@ ALLOWED_IMG_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 DEFAULT_OCCASION = "Birthday"
 
 app = FastAPI(title="Etsy Auto-Lister")
+
+
+@app.exception_handler(finance.FinanceError)
+async def _finance_error_handler(
+    _request: Request, exc: finance.FinanceError
+) -> JSONResponse:
+    """Erreurs métier de l'onglet Ventes (sync Etsy, validations) → JSON propre."""
+    return JSONResponse(status_code=exc.status, content={"detail": exc.detail})
 
 
 @app.exception_handler(shops.ShopError)
@@ -1466,6 +1474,126 @@ def easypic_generate(item_id: str, req: EasyPicGenerateReq) -> dict:
         shop=req.shop,
     )
     return {"job_id": job_id, "mode": "preview", "folder": slug}
+
+
+# --------------------------------------------------------------------------- #
+# Ventes & résultat net : commandes Etsy synchronisées, coûts, tendances.
+# Lecture seule côté Etsy (getShopReceipts) ; le suivi d'expédition (statut,
+# n° de suivi, transporteur) est purement LOCAL — rien n'est écrit sur Etsy.
+# --------------------------------------------------------------------------- #
+class FinShipReq(BaseModel):
+    """Mise à jour du suivi d'expédition local d'une commande.
+
+    Seuls les champs envoyés sont modifiés ; `shipping_cost: null` retombe sur
+    le port par défaut des réglages.
+    """
+    shipped: bool | None = None
+    tracking_number: str | None = None
+    carrier: str | None = None
+    ship_note: str | None = None
+    shipping_cost: float | None = None
+
+
+class FinSettingsReq(BaseModel):
+    transaction_fee_pct: float | None = None
+    payment_fee_pct: float | None = None
+    payment_fee_fixed: float | None = None
+    listing_fee: float | None = None
+    fee_vat_pct: float | None = None
+    default_shipping_cost: float | None = None
+
+
+class FinProductCostReq(BaseModel):
+    unit_cost: float
+    title: str | None = None
+
+
+class FinAdReq(BaseModel):
+    day: str  # AAAA-MM-JJ
+    amount: float
+    note: str | None = None
+
+
+@app.post("/api/finance/sync")
+def finance_sync(shop: str | None = None) -> dict:
+    """Synchronise les commandes Etsy (une boutique, ou toutes si shop absent)."""
+    return finance.sync(shop)
+
+
+@app.get("/api/finance/status")
+def finance_status() -> dict:
+    return finance.status()
+
+
+@app.get("/api/finance/summary")
+def finance_summary(days: int = 30, shop: str | None = None, country: str | None = None) -> dict:
+    return finance.summary(days=days, shop=shop, country=country)
+
+
+@app.get("/api/finance/trends")
+def finance_trends(days: int = 30, shop: str | None = None, country: str | None = None) -> dict:
+    return finance.trends(days=days, shop=shop, country=country)
+
+
+@app.get("/api/finance/orders")
+def finance_orders(
+    days: int = 30,
+    shop: str | None = None,
+    country: str | None = None,
+    ship: str = "all",
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    if ship not in ("all", "to_ship", "shipped"):
+        raise HTTPException(status_code=400, detail="ship doit être all, to_ship ou shipped.")
+    return finance.list_orders(
+        days=days, shop=shop, country=country, ship=ship, limit=limit, offset=offset
+    )
+
+
+@app.post("/api/finance/orders/{receipt_id}/shipping")
+def finance_set_shipping(receipt_id: int, req: FinShipReq) -> dict:
+    """Marque une commande expédiée / saisit n° de suivi (LOCAL uniquement)."""
+    fields = req.model_dump(exclude_unset=True)
+    return finance.set_shipping(receipt_id, fields)
+
+
+@app.get("/api/finance/products")
+def finance_products() -> list[dict]:
+    """Produits vendus + coût de revient saisi (pour le calcul du net)."""
+    return finance.products()
+
+
+@app.put("/api/finance/products/{listing_id}")
+def finance_set_product_cost(listing_id: int, req: FinProductCostReq) -> dict:
+    return finance.set_product_cost(listing_id, req.unit_cost, req.title)
+
+
+@app.get("/api/finance/settings")
+def finance_get_settings() -> dict:
+    return finance.get_settings()
+
+
+@app.put("/api/finance/settings")
+def finance_put_settings(req: FinSettingsReq) -> dict:
+    return finance.save_settings(req.model_dump(exclude_unset=True))
+
+
+@app.get("/api/finance/ads")
+def finance_ads(days: int = 90) -> dict:
+    return finance.ads_list(days=days)
+
+
+@app.put("/api/finance/ads")
+def finance_ads_set(req: FinAdReq) -> dict:
+    return finance.ads_set(req.day, req.amount, req.note)
+
+
+@app.delete("/api/finance/ads/{day}")
+def finance_ads_delete(day: str) -> dict:
+    if not finance.ads_delete(day):
+        raise HTTPException(status_code=404, detail="Aucune dépense pub à cette date.")
+    return {"deleted": day}
 
 
 # Serve the single-page frontend for everything else.

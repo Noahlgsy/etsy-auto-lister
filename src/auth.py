@@ -36,7 +36,9 @@ ETSY_AUTH_URL = "https://www.etsy.com/oauth/connect"
 ETSY_TOKEN_URL = "https://api.etsy.com/v3/public/oauth/token"
 REDIRECT_URI = "http://localhost:3003/oauth/redirect"
 CALLBACK_PORT = 3003
-SCOPES = "listings_w listings_r listings_d shops_r shops_w email_r"
+# transactions_r permet de lire les commandes (onglet Ventes). Si ton token a
+# été créé sans ce scope, relance `python -m src.auth` pour ré-autoriser.
+SCOPES = "listings_w listings_r listings_d shops_r shops_w transactions_r email_r"
 
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
