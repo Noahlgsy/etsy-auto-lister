@@ -203,13 +203,14 @@ def _receipt_row(r: dict, shop_id: str) -> tuple:
                 "price": _money(t.get("price")),
             }
         )
+    is_shipped = 1 if r.get("is_shipped") else 0
     return (
         int(r["receipt_id"]),
         str(shop_id),
         created,
         updated,
         (r.get("status") or "").lower(),
-        1 if r.get("is_shipped") else 0,
+        is_shipped,
         (r.get("country_iso") or "").upper(),
         r.get("name") or "",
         currency,
@@ -221,6 +222,11 @@ def _receipt_row(r: dict, shop_id: str) -> tuple:
         item_count,
         json.dumps(items, ensure_ascii=False),
         json.dumps(r, ensure_ascii=False),
+        # Initialisation du suivi LOCAL à la PREMIÈRE insertion seulement (le
+        # ON CONFLICT n'y touche jamais) : une commande déjà expédiée côté Etsy
+        # n'arrive pas dans « À expédier ». Ensuite, seul l'utilisateur décide.
+        is_shipped,
+        updated if is_shipped else None,
     )
 
 
@@ -230,8 +236,8 @@ _UPSERT = """
 INSERT INTO orders (
     receipt_id, shop_id, created_ts, updated_ts, status, is_shipped_etsy,
     buyer_country, buyer_name, currency, subtotal, shipping_charged, tax,
-    discount, grandtotal, item_count, items_json, raw_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    discount, grandtotal, item_count, items_json, raw_json, shipped, shipped_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(receipt_id, shop_id) DO UPDATE SET
     updated_ts = excluded.updated_ts,
     status = excluded.status,
@@ -811,9 +817,18 @@ def seed_demo(n_days: int = 60) -> dict:
 
 
 def clear_demo() -> dict:
+    """Purge TOUT ce que seed_demo a créé : commandes, pub « démo », coûts."""
     with _write_lock, _db() as conn:
         cur = conn.execute("DELETE FROM orders WHERE shop_id = ?", (DEMO_SHOP_ID,))
-    return {"deleted": cur.rowcount}
+        ads = conn.execute("DELETE FROM ad_spend WHERE note = 'démo'")
+        costs = conn.execute(
+            "DELETE FROM product_costs WHERE listing_id IN (9001, 9002, 9003)"
+        )
+    return {
+        "deleted": cur.rowcount,
+        "ads_deleted": ads.rowcount,
+        "costs_deleted": costs.rowcount,
+    }
 
 
 if __name__ == "__main__":
