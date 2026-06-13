@@ -171,8 +171,9 @@ def _db() -> sqlite3.Connection:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)").fetchall()}
     for col, decl in (
         ("cost_override", "REAL"),    # coût de revient saisi pour CETTE commande
-        ("cost_currency", "TEXT"),    # devise du coût saisi (EUR/USD/…)
+        ("cost_currency", "TEXT"),    # devise du coût + port saisis (EUR/USD/…)
         ("purchase_date", "TEXT"),    # date d'achat fournisseur (AAAA-MM-JJ)
+        ("note", "TEXT"),             # commentaire libre sur la commande
     ):
         if col not in cols:
             conn.execute(f"ALTER TABLE orders ADD COLUMN {col} {decl}")
@@ -508,7 +509,13 @@ def _compute(
         cogs = cost_auto
         cogs_missing = auto_missing
 
-    ship_cost = o["shipping_cost"] if o["shipping_cost"] is not None else st["default_shipping_cost"]
+    # Port payé : saisi dans la devise de la commande → converti en € pour le
+    # net. Non saisi → port par défaut (déjà en €, pas de conversion).
+    raw_ship = o["shipping_cost"]
+    if raw_ship is not None:
+        ship_cost = _to_eur(float(raw_ship), cost_currency, st)
+    else:
+        ship_cost = st["default_shipping_cost"]
     excluded = (o["status"] or "") in EXCLUDED_STATUSES
 
     o.update(
@@ -519,6 +526,7 @@ def _compute(
         cost_override=float(override) if override is not None else None,
         cost_currency=cost_currency,
         purchase_date=o.get("purchase_date"),
+        note=o.get("note"),
         cost_auto=round(cost_auto, 2),
         ship_cost=round(float(ship_cost), 2),
         net=round(revenue - fees - cogs - float(ship_cost), 2),
@@ -784,11 +792,33 @@ def list_orders(
     total = len(orders)
     limit = max(1, min(int(limit), 200))
     offset = max(0, int(offset))
+    page = orders[offset : offset + limit]
+    seq = _seq_map(shop)
+    for o in page:
+        o["seq"] = seq.get(o["receipt_id"])
     return {
-        "orders": orders[offset : offset + limit],
+        "orders": page,
         "total": total,
         "to_ship": _to_ship_count(shop),
     }
+
+
+def _seq_map(shop_key: str | None = None) -> dict[int, int]:
+    """Numéro d'ordre stable de chaque commande : #1 = la plus ancienne.
+
+    Calculé sur TOUTES les commandes de la boutique (indépendant des filtres
+    d'affichage), pour que le numéro d'une commande ne bouge jamais.
+    """
+    shop_id = _shop_id_for_key(shop_key)
+    sql = "SELECT receipt_id FROM orders"
+    args: list = []
+    if shop_id:
+        sql += " WHERE shop_id = ?"
+        args.append(shop_id)
+    sql += " ORDER BY created_ts ASC, receipt_id ASC"
+    with _db() as conn:
+        rows = conn.execute(sql, args).fetchall()
+    return {int(r["receipt_id"]): i + 1 for i, r in enumerate(rows)}
 
 
 def set_shipping(receipt_id: int, fields: dict) -> dict:
@@ -798,7 +828,7 @@ def set_shipping(receipt_id: int, fields: dict) -> dict:
     (str), shipping_cost (float, None = retomber sur le défaut). Seuls les
     champs présents dans ``fields`` sont modifiés. Aucune écriture Etsy.
     """
-    allowed = {"shipped", "tracking_number", "carrier", "ship_note",
+    allowed = {"shipped", "tracking_number", "carrier", "ship_note", "note",
                "shipping_cost", "cost_override", "cost_currency", "purchase_date"}
     sets: list[str] = []
     args: list = []

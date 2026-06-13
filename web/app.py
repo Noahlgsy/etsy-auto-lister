@@ -1504,6 +1504,7 @@ class FinShipReq(BaseModel):
     cost_override: float | None = None
     cost_currency: str | None = None   # EUR / USD / GBP / CHF / CNY
     purchase_date: str | None = None   # date d'achat fournisseur (AAAA-MM-JJ)
+    note: str | None = None            # commentaire libre sur la commande
 
 
 class FinSettingsReq(BaseModel):

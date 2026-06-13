@@ -1081,3 +1081,27 @@ table.grid td.act .xs { margin-left: 6px; }
 .fin-flow-out:hover { opacity: 1; }
 .fin-table .fin-in { color: var(--ok); font-weight: 600; }
 .fin-table .fin-out { color: var(--err); font-weight: 600; }
+
+/* Numéro de commande, badge nb d'articles, commentaire, devise du port */
+.fin-o-num {
+  flex: none; width: 38px; font-size: 12px; font-weight: 700;
+  color: var(--accent-dark); font-variant-numeric: tabular-nums;
+}
+.fin-o-qty {
+  flex: none; font-size: 12px; font-weight: 700; color: var(--muted);
+  background: var(--bg-2); border-radius: 6px; padding: 2px 7px;
+  font-variant-numeric: tabular-nums;
+}
+.fin-o-note {
+  font-size: 11.5px; color: var(--accent-dark);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fin-od-note { display: flex; align-items: center; gap: 10px; margin: 8px 0 2px; }
+.fin-od-note label { font-size: 12.5px; font-weight: 600; color: var(--ink); flex: none; }
+.fin-od-note .fin-note { flex: 1; min-width: 0; }
+.fin-shipfield { position: relative; display: inline-flex; align-items: center; flex: none; }
+.fin-shipfield .fin-shipcost { width: 110px; padding-right: 34px; }
+.fin-shipfield .fin-shipcur {
+  position: absolute; right: 10px; font-size: 12px; font-weight: 700;
+  color: var(--muted); pointer-events: none;
+}

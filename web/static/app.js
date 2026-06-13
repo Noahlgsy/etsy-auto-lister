@@ -2927,6 +2927,7 @@ function finOrderRow(o) {
     .filter(Boolean).join(", ");
   return `<div class="fin-order${o.excluded ? " excluded" : ""}" data-rid="${o.receipt_id}">
     <div class="fin-order-main" data-fin-toggle="${o.receipt_id}">
+      <span class="fin-o-num" title="N° de commande">#${o.seq ?? "–"}</span>
       <span class="fin-o-date">${date}</span>
       <span class="fin-o-flag" title="${escapeHtml(countryName(o.buyer_country))}">${flagEmoji(o.buyer_country)}</span>
       ${(o.items || [])[0]?.listing_id
@@ -2937,7 +2938,9 @@ function finOrderRow(o) {
       <span class="fin-o-col">
         <span class="fin-o-items" title="${escapeHtml(itemsRaw)}">${escapeHtml(o.buyer_name || "")}${o.buyer_name ? " — " : ""}${escapeHtml(itemsRaw) || "—"}</span>
         ${addrCompact ? `<span class="fin-o-addr" title="${escapeHtml((o.address && o.address.formatted) || addrCompact)}">📍 ${escapeHtml(addrCompact)}</span>` : ""}
+        ${o.note ? `<span class="fin-o-note" title="${escapeHtml(o.note)}">💬 ${escapeHtml(o.note)}</span>` : ""}
       </span>
+      <span class="fin-o-qty" title="${o.item_count} article${o.item_count > 1 ? "s" : ""}">×${o.item_count}</span>
       <span class="fin-o-rev">${finMoney(o.revenue, cur)}</span>
       <span class="fin-o-net${o.net < 0 ? " neg" : ""}">${o.excluded ? "" : "net " + finMoney(o.net, cur)}</span>
       ${shipChip}
@@ -2945,7 +2948,8 @@ function finOrderRow(o) {
     <div class="fin-order-detail hidden" id="fin-od-${o.receipt_id}">
       <p class="muted small fin-od-breakdown">
         CA ${finMoney(o.revenue, cur)} − frais ${finMoney(o.fees, cur)} − produit ${finMoney(o.cogs, cur)}${o.cost_override != null ? " ✎" : o.cogs_missing ? " ⚠" : ""}
-        − port ${finMoney(o.ship_cost, cur)} = <b>net ${finMoney(o.net, cur)}</b>${o.is_shipped_etsy ? " · marquée expédiée côté Etsy" : ""}
+        − port ${finMoney(o.ship_cost, cur)}${o.shipping_cost != null && o.cost_currency && o.cost_currency !== "EUR" ? ` (${o.shipping_cost} ${CUR_SYM[o.cost_currency] || o.cost_currency})` : ""}
+        = <b>net ${finMoney(o.net, cur)}</b>${o.is_shipped_etsy ? " · marquée expédiée côté Etsy" : ""}
       </p>
       <div class="fin-od-cost">
         <label>Prix d'achat</label>
@@ -2970,10 +2974,17 @@ function finOrderRow(o) {
         </label>
         <input class="fin-tracking" type="text" placeholder="N° de suivi" value="${escapeHtml(o.tracking_number || "")}" />
         <input class="fin-carrier" type="text" placeholder="Transporteur (Colissimo…)" value="${escapeHtml(o.carrier || "")}" />
-        <input class="fin-shipcost" type="number" step="0.01" min="0" placeholder="Port payé"
-               title="Coût d'envoi réel de CETTE commande — vide = défaut des réglages"
-               value="${o.shipping_cost != null ? o.shipping_cost : ""}" />
+        <span class="fin-shipfield">
+          <input class="fin-shipcost" type="number" step="0.01" min="0" placeholder="Port payé"
+                 title="Coût d'envoi réel de CETTE commande, dans la devise choisie — vide = défaut des réglages"
+                 value="${o.shipping_cost != null ? o.shipping_cost : ""}" />
+          <span class="fin-shipcur">${CUR_SYM[o.cost_currency] || "€"}</span>
+        </span>
         <button class="primary small-btn fin-save-ship" data-rid="${o.receipt_id}" type="button">Enregistrer</button>
+      </div>
+      <div class="fin-od-note">
+        <label>💬 Commentaire</label>
+        <input class="fin-note" type="text" placeholder="Note libre sur cette commande…" value="${escapeHtml(o.note || "")}" />
       </div>
       ${o.shipped && o.shipped_at
         ? `<p class="muted small">Expédiée le ${new Date(o.shipped_at * 1000).toLocaleDateString("fr-FR")}${o.tracking_number ? " · " + escapeHtml(o.tracking_number) : ""} <i>(suivi local, rien n'est envoyé à Etsy)</i></p>`
@@ -2995,6 +3006,7 @@ async function finSaveShip(rid) {
     cost_override: co === "" ? null : Number(co),
     cost_currency: od.querySelector(".fin-costcur").value,
     purchase_date: od.querySelector(".fin-purchasedate").value || null,
+    note: od.querySelector(".fin-note").value.trim() || null,
   };
   try {
     await api(`/api/finance/orders/${rid}/shipping`, {
@@ -3187,9 +3199,18 @@ function finInit() {
       );
       return;
     }
-    if (e.target.closest("input, button, label, .switch")) return;
+    if (e.target.closest("input, button, label, .switch, select")) return;
     const main = e.target.closest(".fin-order-main");
     if (main) $(`#fin-od-${main.dataset.finToggle}`)?.classList.toggle("hidden");
+  });
+
+  // La devise du prix d'achat pilote aussi celle du port : MAJ du symbole en direct.
+  $("#fin-orders-list").addEventListener("change", (e) => {
+    const sel = e.target.closest(".fin-costcur");
+    if (!sel) return;
+    const od = sel.closest(".fin-order-detail");
+    const suffix = od?.querySelector(".fin-shipcur");
+    if (suffix) suffix.textContent = CUR_SYM[sel.value] || "€";
   });
 
   // Délégation : coûts produits (bouton OK ou touche Entrée).
