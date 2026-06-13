@@ -2798,6 +2798,9 @@ function finOrderRow(o) {
     : o.shipped
       ? `<span class="fin-ship-chip ok">✓ Expédiée</span>`
       : `<span class="fin-ship-chip todo">📦 À expédier</span>`;
+  const a = o.address || {};
+  const addrCompact = [a.street, a.city_line, countryName(o.buyer_country)]
+    .filter(Boolean).join(", ");
   return `<div class="fin-order${o.excluded ? " excluded" : ""}" data-rid="${o.receipt_id}">
     <div class="fin-order-main" data-fin-toggle="${o.receipt_id}">
       <span class="fin-o-date">${date}</span>
@@ -2807,7 +2810,10 @@ function finOrderRow(o) {
              src="/api/finance/listing-image/${o.items[0].listing_id}"
              onerror="this.style.visibility='hidden'" />`
         : ""}
-      <span class="fin-o-items" title="${escapeHtml(itemsRaw)}">${escapeHtml(o.buyer_name || "")}${o.buyer_name ? " — " : ""}${escapeHtml(itemsRaw) || "—"}</span>
+      <span class="fin-o-col">
+        <span class="fin-o-items" title="${escapeHtml(itemsRaw)}">${escapeHtml(o.buyer_name || "")}${o.buyer_name ? " — " : ""}${escapeHtml(itemsRaw) || "—"}</span>
+        ${addrCompact ? `<span class="fin-o-addr" title="${escapeHtml((o.address && o.address.formatted) || addrCompact)}">📍 ${escapeHtml(addrCompact)}</span>` : ""}
+      </span>
       <span class="fin-o-rev">${finMoney(o.revenue, cur)}</span>
       <span class="fin-o-net${o.net < 0 ? " neg" : ""}">${o.excluded ? "" : "net " + finMoney(o.net, cur)}</span>
       ${shipChip}
@@ -2817,6 +2823,10 @@ function finOrderRow(o) {
         CA ${finMoney(o.revenue, cur)} − frais ${finMoney(o.fees, cur)} − produit ${finMoney(o.cogs, cur)}${o.cogs_missing ? " ⚠" : ""}
         − port ${finMoney(o.ship_cost, cur)} = <b>net ${finMoney(o.net, cur)}</b>${o.is_shipped_etsy ? " · marquée expédiée côté Etsy" : ""}
       </p>
+      ${a.formatted ? `<div class="fin-od-addr">
+        <span class="fin-od-addr-txt">${escapeHtml(a.formatted).replace(/\n/g, "<br>")}</span>
+        <button class="ghost small-btn fin-copy-addr" data-addr="${encodeURIComponent(a.formatted)}" type="button">📋 Copier l'adresse</button>
+      </div>` : ""}
       <div class="fin-od-ship">
         <label class="switch">
           <input type="checkbox" class="fin-shipped" ${o.shipped ? "checked" : ""} />
@@ -3020,6 +3030,15 @@ function finInit() {
   $("#fin-orders-list").addEventListener("click", (e) => {
     const save = e.target.closest(".fin-save-ship");
     if (save) { finSaveShip(save.dataset.rid); return; }
+    const copy = e.target.closest(".fin-copy-addr");
+    if (copy) {
+      const addr = decodeURIComponent(copy.dataset.addr || "");
+      navigator.clipboard.writeText(addr).then(
+        () => toast("Adresse copiée."),
+        () => toast("Copie impossible (clipboard).", true),
+      );
+      return;
+    }
     if (e.target.closest("input, button, label, .switch")) return;
     const main = e.target.closest(".fin-order-main");
     if (main) $(`#fin-od-${main.dataset.finToggle}`)?.classList.toggle("hidden");

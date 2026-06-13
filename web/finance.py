@@ -17,6 +17,7 @@ listing ; le port payé par commande (ou une valeur par défaut).
 
 from __future__ import annotations
 
+import html
 import json
 import sqlite3
 import threading
@@ -396,12 +397,51 @@ def _shop_id_for_key(shop_key: str | None) -> str | None:
     return shops.get_shop(shop_key).shop_id
 
 
-def _compute(order: sqlite3.Row, st: dict, costs: dict[int, float]) -> dict:
-    """Une ligne orders → dict + champs calculés (frais, COGS, net)."""
+def _address_from_raw(raw_json: str | None) -> dict:
+    """Adresse de livraison depuis le receipt Etsy brut (affichage LOCAL).
+
+    Donnée perso de l'acheteur, nécessaire pour expédier le colis ; elle ne
+    quitte jamais la machine. Renvoie un dict vide si le receipt n'en porte pas
+    (ex. données de démo).
+    """
+    try:
+        r = json.loads(raw_json or "{}")
+    except Exception:  # noqa: BLE001
+        return {}
+    # Etsy double-encode parfois les adresses (« St Jude&#39;s Park ») : on
+    # décode les entités HTML pour un affichage et un copier-coller propres.
+    def g(key: str) -> str:
+        return html.unescape((r.get(key) or "").strip())
+
+    street = " ".join(x for x in [g("first_line"), g("second_line")] if x)
+    city_line = " ".join(x for x in [g("zip"), g("city")] if x).strip()
+    state = g("state")
+    if state:
+        city_line = f"{city_line} ({state})" if city_line else state
+    return {
+        "name": g("name"),
+        "street": street,
+        "city_line": city_line,
+        "country": g("country_iso").upper(),
+        "formatted": html.unescape((r.get("formatted_address") or "").strip()),
+    }
+
+
+def _compute(
+    order: sqlite3.Row, st: dict, costs: dict[int, float], *, with_address: bool = False
+) -> dict:
+    """Une ligne orders → dict + champs calculés (frais, COGS, net).
+
+    `with_address` ajoute l'adresse de livraison (parse le receipt brut) ; il
+    n'est mis qu'au niveau de la liste des commandes, pas dans les agrégats
+    (summary/trends), pour ne pas parser le raw_json à chaque KPI.
+    """
     o = dict(order)
     items = json.loads(o.pop("items_json") or "[]")
-    o.pop("raw_json", None)
+    raw = o.pop("raw_json", None)
     o["items"] = items
+    if with_address:
+        o["address"] = _address_from_raw(raw)
 
     revenue = o["subtotal"] + o["shipping_charged"]
     fees = st["listing_fee"] * max(1, o["item_count"])
@@ -441,6 +481,7 @@ def _orders_window(
     country: str | None = None,
     *,
     until_ts: int | None = None,
+    with_address: bool = False,
 ) -> list[dict]:
     """Commandes de la fenêtre, avec champs calculés, plus récentes d'abord."""
     until = int(until_ts if until_ts is not None else time.time())
@@ -461,7 +502,7 @@ def _orders_window(
         st = get_settings()
         costs = _product_cost_map(conn)
         rows = conn.execute(sql, args).fetchall()
-    return [_compute(r, st, costs) for r in rows]
+    return [_compute(r, st, costs, with_address=with_address) for r in rows]
 
 
 def _ads_total(days: int, *, until_ts: int | None = None) -> float:
@@ -600,7 +641,7 @@ def list_orders(
     offset: int = 0,
 ) -> dict:
     """Liste paginée des commandes de la fenêtre (avec frais/net calculés)."""
-    orders = _orders_window(days, shop, country)
+    orders = _orders_window(days, shop, country, with_address=True)
     if ship == "to_ship":
         orders = [o for o in orders if not o["shipped"] and not o["excluded"]]
     elif ship == "shipped":
@@ -652,7 +693,7 @@ def set_shipping(receipt_id: int, fields: dict) -> dict:
         ).fetchone()
         st = get_settings()
         costs = _product_cost_map(conn)
-    return _compute(row, st, costs)
+    return _compute(row, st, costs, with_address=True)
 
 
 # --------------------------------------------------------------------------- #

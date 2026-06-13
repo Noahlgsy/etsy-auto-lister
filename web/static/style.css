@@ -1001,3 +1001,17 @@ table.grid td.act .xs { margin-left: 6px; }
   vertical-align: middle; margin-right: 9px;
   background: var(--bg-2); border: 1px solid var(--line);
 }
+
+/* Adresse de livraison sous le nom de l'acheteur */
+.fin-o-col { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.fin-o-col .fin-o-items { flex: none; }
+.fin-o-addr {
+  font-size: 11.5px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fin-od-addr {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  background: var(--bg-2); border-radius: 9px; padding: 9px 11px; margin-bottom: 8px;
+}
+.fin-od-addr-txt { font-size: 13px; line-height: 1.45; }
+.fin-copy-addr { flex: none; white-space: nowrap; }
