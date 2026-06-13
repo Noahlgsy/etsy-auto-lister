@@ -1066,4 +1066,7 @@ table.grid td.act .xs { margin-left: 6px; }
   background: var(--bg-2); border-radius: 8px;
 }
 .fin-od-cost label { font-size: 12.5px; font-weight: 600; color: var(--ink); }
-.fin-od-cost .fin-costoverride { width: 120px; flex: none; }
+.fin-od-cost .fin-costoverride { width: 96px; flex: none; }
+.fin-od-cost .fin-costcur { width: auto; flex: none; padding: 8px 8px; font-size: 13px; }
+.fin-od-cost .fin-purchasedate { width: auto; flex: none; padding: 7px 9px; font-size: 13px; }
+.fin-od-date-lbl { font-weight: 600; color: var(--muted); font-size: 12px; }

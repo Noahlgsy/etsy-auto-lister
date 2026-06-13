@@ -135,7 +135,30 @@ DEFAULT_SETTINGS: dict[str, float] = {
     "listing_fee": 0.19,           # 0,20 $ ≈ 0,19 € par article vendu
     "fee_vat_pct": 0.0,            # TVA appliquée aux frais Etsy (FR : 20 si non assujetti)
     "default_shipping_cost": 0.0,  # port payé par défaut quand non saisi sur la commande
+    # Taux de change vers l'euro (1 unité de devise = X €), éditables. Servent à
+    # convertir un coût d'achat saisi en devise pour le calcul du net en €.
+    "fx_usd": 0.92,
+    "fx_gbp": 1.17,
+    "fx_chf": 1.05,
+    "fx_cny": 0.13,
 }
+
+# Devises proposées pour le coût d'achat d'une commande (code → symbole).
+CURRENCIES: dict[str, str] = {
+    "EUR": "€", "USD": "$", "GBP": "£", "CHF": "CHF", "CNY": "¥",
+}
+
+
+def _to_eur(amount: float, currency: str | None, st: dict[str, float]) -> float:
+    """Convertit un montant en € via les taux configurés. EUR → identité.
+
+    Un taux absent/nul laisse le montant tel quel (mieux que de l'annuler).
+    """
+    cur = (currency or "EUR").upper()
+    if cur == "EUR":
+        return amount
+    rate = st.get(f"fx_{cur.lower()}", 0.0)
+    return amount * rate if rate and rate > 0 else amount
 
 
 def _db() -> sqlite3.Connection:
@@ -146,9 +169,13 @@ def _db() -> sqlite3.Connection:
     conn.executescript(_SCHEMA)
     # Migration légère : colonnes ajoutées après coup sur une base existante.
     cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)").fetchall()}
-    if "cost_override" not in cols:
-        # Coût de revient saisi pour CETTE commande ; prime sur le coût produit.
-        conn.execute("ALTER TABLE orders ADD COLUMN cost_override REAL")
+    for col, decl in (
+        ("cost_override", "REAL"),    # coût de revient saisi pour CETTE commande
+        ("cost_currency", "TEXT"),    # devise du coût saisi (EUR/USD/…)
+        ("purchase_date", "TEXT"),    # date d'achat fournisseur (AAAA-MM-JJ)
+    ):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE orders ADD COLUMN {col} {decl}")
     return conn
 
 
@@ -470,10 +497,12 @@ def _compute(
         else:
             auto_missing = True
 
-    # Prix d'achat saisi pour CETTE commande (cost_override) → prime sur l'auto.
+    # Prix d'achat saisi pour CETTE commande (cost_override), dans sa devise →
+    # converti en € puis prime sur l'auto. None = on retombe sur l'auto.
     override = o.get("cost_override")
+    cost_currency = (o.get("cost_currency") or "EUR").upper()
     if override is not None:
-        cogs = float(override)
+        cogs = _to_eur(float(override), cost_currency, st)
         cogs_missing = False
     else:
         cogs = cost_auto
@@ -488,6 +517,8 @@ def _compute(
         cogs=round(cogs, 2),
         cogs_missing=cogs_missing,
         cost_override=float(override) if override is not None else None,
+        cost_currency=cost_currency,
+        purchase_date=o.get("purchase_date"),
         cost_auto=round(cost_auto, 2),
         ship_cost=round(float(ship_cost), 2),
         net=round(revenue - fees - cogs - float(ship_cost), 2),
@@ -706,7 +737,7 @@ def set_shipping(receipt_id: int, fields: dict) -> dict:
     champs présents dans ``fields`` sont modifiés. Aucune écriture Etsy.
     """
     allowed = {"shipped", "tracking_number", "carrier", "ship_note",
-               "shipping_cost", "cost_override"}
+               "shipping_cost", "cost_override", "cost_currency", "purchase_date"}
     sets: list[str] = []
     args: list = []
     for key, value in fields.items():
@@ -718,6 +749,20 @@ def set_shipping(receipt_id: int, fields: dict) -> dict:
         elif key in ("shipping_cost", "cost_override"):
             sets.append(f"{key} = ?")
             args.append(None if value is None else max(0.0, float(value)))
+        elif key == "cost_currency":
+            cur = (value or "EUR").upper()
+            if cur not in CURRENCIES:
+                raise FinanceError(400, f"Devise non supportée : {value}.")
+            sets.append("cost_currency = ?")
+            args.append(cur)
+        elif key == "purchase_date":
+            if value:
+                try:
+                    datetime.strptime(value, "%Y-%m-%d")
+                except ValueError:
+                    raise FinanceError(400, "Date d'achat invalide (AAAA-MM-JJ).")
+            sets.append("purchase_date = ?")
+            args.append(value or None)
         else:
             sets.append(f"{key} = ?")
             args.append((str(value).strip() or None) if value is not None else None)

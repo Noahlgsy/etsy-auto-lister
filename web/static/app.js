@@ -2522,6 +2522,28 @@ function finShopQ() {
   return state.activeShop ? `&shop=${enc(state.activeShop)}` : "";
 }
 
+// Devises proposées pour le coût d'achat d'une commande (code → symbole).
+const CUR_SYM = { EUR: "€", USD: "$", GBP: "£", CHF: "CHF", CNY: "¥" };
+function curOptions(selected) {
+  const sel = (selected || "EUR").toUpperCase();
+  return Object.entries(CUR_SYM).map(([c, s]) =>
+    `<option value="${c}" ${c === sel ? "selected" : ""}>${s} ${c}</option>`
+  ).join("");
+}
+
+// Indice sous le champ prix d'achat : conversion en € si devise étrangère.
+function cptCostHint(o, cur) {
+  if (o.cost_override == null) {
+    return o.cost_auto ? `vide = coût produit auto (${finMoney(o.cost_auto, cur)})`
+                       : "remplace le coût produit pour le net";
+  }
+  if (o.cost_currency && o.cost_currency !== "EUR") {
+    const sym = CUR_SYM[o.cost_currency] || o.cost_currency;
+    return `${o.cost_override} ${sym} → ${finMoney(o.cogs, cur)} · saisi`;
+  }
+  return "saisi — prime sur le coût produit";
+}
+
 function finMoney(v, cur) {
   if (v == null || !isFinite(Number(v))) return "—";
   const sym = (cur || "EUR") === "EUR" ? "€" : cur === "GBP" ? "£" : "$";
@@ -2825,14 +2847,16 @@ function finOrderRow(o) {
         − port ${finMoney(o.ship_cost, cur)} = <b>net ${finMoney(o.net, cur)}</b>${o.is_shipped_etsy ? " · marquée expédiée côté Etsy" : ""}
       </p>
       <div class="fin-od-cost">
-        <label>Prix d'achat de cette commande</label>
+        <label>Prix d'achat</label>
         <input class="fin-costoverride" type="number" step="0.01" min="0"
                placeholder="${o.cost_auto ? "auto " + o.cost_auto : "ex : 11,30"}"
                title="Remplace le coût produit pour le net de CETTE commande — vide = coût produit auto"
                value="${o.cost_override != null ? o.cost_override : ""}" />
-        <span class="muted small">${o.cost_override != null
-          ? "saisi — prime sur le coût produit"
-          : o.cost_auto ? "vide = coût produit auto (" + finMoney(o.cost_auto, cur) + ")" : "remplace le coût produit pour le net"}</span>
+        <select class="fin-costcur" title="Devise du prix d'achat">${curOptions(o.cost_currency)}</select>
+        <label class="fin-od-date-lbl">acheté le</label>
+        <input class="fin-purchasedate" type="date" title="Date d'achat fournisseur (suivi de trésorerie)"
+               value="${o.purchase_date || ""}" />
+        <span class="muted small">${cptCostHint(o, cur)}</span>
       </div>
       ${a.formatted ? `<div class="fin-od-addr">
         <span class="fin-od-addr-txt">${escapeHtml(a.formatted).replace(/\n/g, "<br>")}</span>
@@ -2868,6 +2892,8 @@ async function finSaveShip(rid) {
     carrier: od.querySelector(".fin-carrier").value.trim(),
     shipping_cost: sc === "" ? null : Number(sc),
     cost_override: co === "" ? null : Number(co),
+    cost_currency: od.querySelector(".fin-costcur").value,
+    purchase_date: od.querySelector(".fin-purchasedate").value || null,
   };
   try {
     await api(`/api/finance/orders/${rid}/shipping`, {
@@ -2894,6 +2920,10 @@ async function finLoadCosts() {
     $("#fs-listing").value = settings.listing_fee;
     $("#fs-vat").value = settings.fee_vat_pct;
     $("#fs-ship").value = settings.default_shipping_cost;
+    $("#fx-usd").value = settings.fx_usd;
+    $("#fx-gbp").value = settings.fx_gbp;
+    $("#fx-chf").value = settings.fx_chf;
+    $("#fx-cny").value = settings.fx_cny;
     finRenderProducts(prods);
     finRenderAds(ads);
   } catch (e) { toast("Coûts : " + e.message, true); }
@@ -2907,6 +2937,10 @@ async function finSaveSettings() {
     listing_fee: Number($("#fs-listing").value),
     fee_vat_pct: Number($("#fs-vat").value),
     default_shipping_cost: Number($("#fs-ship").value),
+    fx_usd: Number($("#fx-usd").value),
+    fx_gbp: Number($("#fx-gbp").value),
+    fx_chf: Number($("#fx-chf").value),
+    fx_cny: Number($("#fx-cny").value),
   };
   try {
     await api("/api/finance/settings", {

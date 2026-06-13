@@ -1502,6 +1502,8 @@ class FinShipReq(BaseModel):
     shipping_cost: float | None = None
     # Prix d'achat saisi pour cette commande ; null = retombe sur le coût produit.
     cost_override: float | None = None
+    cost_currency: str | None = None   # EUR / USD / GBP / CHF / CNY
+    purchase_date: str | None = None   # date d'achat fournisseur (AAAA-MM-JJ)
 
 
 class FinSettingsReq(BaseModel):
@@ -1511,6 +1513,11 @@ class FinSettingsReq(BaseModel):
     listing_fee: float | None = None
     fee_vat_pct: float | None = None
     default_shipping_cost: float | None = None
+    # Taux de change vers l'euro (1 unité = X €).
+    fx_usd: float | None = None
+    fx_gbp: float | None = None
+    fx_chf: float | None = None
+    fx_cny: float | None = None
 
 
 class FinProductCostReq(BaseModel):
