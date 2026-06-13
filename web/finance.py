@@ -144,6 +144,11 @@ def _db() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(_SCHEMA)
+    # Migration légère : colonnes ajoutées après coup sur une base existante.
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)").fetchall()}
+    if "cost_override" not in cols:
+        # Coût de revient saisi pour CETTE commande ; prime sur le coût produit.
+        conn.execute("ALTER TABLE orders ADD COLUMN cost_override REAL")
     return conn
 
 
@@ -455,14 +460,24 @@ def _compute(
     fees += st["payment_fee_pct"] / 100 * (revenue + o["tax"]) + st["payment_fee_fixed"]
     fees *= 1 + st["fee_vat_pct"] / 100
 
-    cogs = 0.0
-    cogs_missing = False
+    # Coût de revient « auto » = somme des coûts produits saisis × quantités.
+    cost_auto = 0.0
+    auto_missing = False
     for it in items:
         lid = it.get("listing_id")
         if lid in costs:
-            cogs += costs[lid] * it.get("quantity", 1)
+            cost_auto += costs[lid] * it.get("quantity", 1)
         else:
-            cogs_missing = True
+            auto_missing = True
+
+    # Prix d'achat saisi pour CETTE commande (cost_override) → prime sur l'auto.
+    override = o.get("cost_override")
+    if override is not None:
+        cogs = float(override)
+        cogs_missing = False
+    else:
+        cogs = cost_auto
+        cogs_missing = auto_missing
 
     ship_cost = o["shipping_cost"] if o["shipping_cost"] is not None else st["default_shipping_cost"]
     excluded = (o["status"] or "") in EXCLUDED_STATUSES
@@ -472,6 +487,8 @@ def _compute(
         fees=round(fees, 2),
         cogs=round(cogs, 2),
         cogs_missing=cogs_missing,
+        cost_override=float(override) if override is not None else None,
+        cost_auto=round(cost_auto, 2),
         ship_cost=round(float(ship_cost), 2),
         net=round(revenue - fees - cogs - float(ship_cost), 2),
         excluded=excluded,
@@ -688,7 +705,8 @@ def set_shipping(receipt_id: int, fields: dict) -> dict:
     (str), shipping_cost (float, None = retomber sur le défaut). Seuls les
     champs présents dans ``fields`` sont modifiés. Aucune écriture Etsy.
     """
-    allowed = {"shipped", "tracking_number", "carrier", "ship_note", "shipping_cost"}
+    allowed = {"shipped", "tracking_number", "carrier", "ship_note",
+               "shipping_cost", "cost_override"}
     sets: list[str] = []
     args: list = []
     for key, value in fields.items():
@@ -697,8 +715,8 @@ def set_shipping(receipt_id: int, fields: dict) -> dict:
         if key == "shipped":
             sets += ["shipped = ?", "shipped_at = ?"]
             args += [1 if value else 0, int(time.time()) if value else None]
-        elif key == "shipping_cost":
-            sets.append("shipping_cost = ?")
+        elif key in ("shipping_cost", "cost_override"):
+            sets.append(f"{key} = ?")
             args.append(None if value is None else max(0.0, float(value)))
         else:
             sets.append(f"{key} = ?")

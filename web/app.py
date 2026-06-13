@@ -1500,6 +1500,8 @@ class FinShipReq(BaseModel):
     carrier: str | None = None
     ship_note: str | None = None
     shipping_cost: float | None = None
+    # Prix d'achat saisi pour cette commande ; null = retombe sur le coût produit.
+    cost_override: float | None = None
 
 
 class FinSettingsReq(BaseModel):

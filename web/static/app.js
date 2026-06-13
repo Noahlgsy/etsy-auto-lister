@@ -2821,9 +2821,19 @@ function finOrderRow(o) {
     </div>
     <div class="fin-order-detail hidden" id="fin-od-${o.receipt_id}">
       <p class="muted small fin-od-breakdown">
-        CA ${finMoney(o.revenue, cur)} − frais ${finMoney(o.fees, cur)} − produit ${finMoney(o.cogs, cur)}${o.cogs_missing ? " ⚠" : ""}
+        CA ${finMoney(o.revenue, cur)} − frais ${finMoney(o.fees, cur)} − produit ${finMoney(o.cogs, cur)}${o.cost_override != null ? " ✎" : o.cogs_missing ? " ⚠" : ""}
         − port ${finMoney(o.ship_cost, cur)} = <b>net ${finMoney(o.net, cur)}</b>${o.is_shipped_etsy ? " · marquée expédiée côté Etsy" : ""}
       </p>
+      <div class="fin-od-cost">
+        <label>Prix d'achat de cette commande</label>
+        <input class="fin-costoverride" type="number" step="0.01" min="0"
+               placeholder="${o.cost_auto ? "auto " + o.cost_auto : "ex : 11,30"}"
+               title="Remplace le coût produit pour le net de CETTE commande — vide = coût produit auto"
+               value="${o.cost_override != null ? o.cost_override : ""}" />
+        <span class="muted small">${o.cost_override != null
+          ? "saisi — prime sur le coût produit"
+          : o.cost_auto ? "vide = coût produit auto (" + finMoney(o.cost_auto, cur) + ")" : "remplace le coût produit pour le net"}</span>
+      </div>
       ${a.formatted ? `<div class="fin-od-addr">
         <span class="fin-od-addr-txt">${escapeHtml(a.formatted).replace(/\n/g, "<br>")}</span>
         <button class="ghost small-btn fin-copy-addr" data-addr="${encodeURIComponent(a.formatted)}" type="button">📋 Copier l'adresse</button>
@@ -2851,11 +2861,13 @@ async function finSaveShip(rid) {
   const od = $(`#fin-od-${rid}`);
   if (!od) return;
   const sc = od.querySelector(".fin-shipcost").value;
+  const co = od.querySelector(".fin-costoverride").value;
   const body = {
     shipped: od.querySelector(".fin-shipped").checked,
     tracking_number: od.querySelector(".fin-tracking").value.trim(),
     carrier: od.querySelector(".fin-carrier").value.trim(),
     shipping_cost: sc === "" ? null : Number(sc),
+    cost_override: co === "" ? null : Number(co),
   };
   try {
     await api(`/api/finance/orders/${rid}/shipping`, {
