@@ -135,6 +135,9 @@ def generate(days: int = 365, shop: str | None = None) -> dict:
 
     orders = [o for o in finance.computed_orders(days, shop) if not o["excluded"]]
     orders.sort(key=lambda o: o["created_ts"])
+    # Numéro de commande affiché dans l'app (#1 = la plus ancienne) : il sert de
+    # référence de pièce dans le FEC, le même que dans l'onglet Commandes.
+    seq = finance._seq_map(shop)
 
     ventes: list[dict] = []
     achats: list[dict] = []
@@ -142,7 +145,12 @@ def generate(days: int = 365, shop: str | None = None) -> dict:
 
     for o in orders:
         date = datetime.fromtimestamp(o["created_ts"], finance.TZ).strftime("%Y-%m-%d")
-        piece = str(o["receipt_id"])
+        receipt = str(o["receipt_id"])
+        order_no = seq.get(o["receipt_id"])
+        # PieceRef = n° de commande (référence pour l'utilisateur) ; le réf Etsy
+        # reste dans le libellé pour le rapprochement.
+        piece = str(order_no) if order_no else receipt
+        no = f"n°{order_no}" if order_no else receipt
         who = (o.get("buyer_name") or "").strip()
         subtotal = o["subtotal"]
         shipping = o["shipping_charged"]
@@ -166,7 +174,9 @@ def generate(days: int = 365, shop: str | None = None) -> dict:
         ventes.append({
             "journal": "VE", "journal_lib": "Journal des ventes",
             "num": ve_num, "date": date, "piece": piece,
-            "label": f"Vente Etsy {piece}" + (f" – {who}" if who else ""),
+            "order_no": order_no, "receipt": receipt,
+            "label": f"Vente Etsy {no} – {who} (réf {receipt})" if who
+                     else f"Vente Etsy {no} (réf {receipt})",
             "lines": lines,
         })
 
@@ -183,7 +193,8 @@ def generate(days: int = 365, shop: str | None = None) -> dict:
             achats.append({
                 "journal": "AC", "journal_lib": "Journal des achats",
                 "num": ac_num, "date": date, "piece": piece,
-                "label": f"Frais Etsy vente {piece}",
+                "order_no": order_no, "receipt": receipt,
+                "label": f"Frais Etsy cde {no} (réf {receipt})",
                 "lines": [
                     _line(acc["commission"], lib["commission"], debit=commission),
                     _line(acc["paiement"], lib["paiement"], debit=payment),
@@ -205,7 +216,8 @@ def generate(days: int = 365, shop: str | None = None) -> dict:
             achats.append({
                 "journal": "AC", "journal_lib": "Journal des achats",
                 "num": ac_num, "date": date, "piece": piece,
-                "label": f"Marchandises + port vente {piece}",
+                "order_no": order_no, "receipt": receipt,
+                "label": f"Marchandises + port cde {no} (réf {receipt})",
                 "lines": lines,
             })
 

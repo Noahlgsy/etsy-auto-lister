@@ -3314,8 +3314,9 @@ function cptRenderJournal() {
     return;
   }
   const rows = entries.map((e) => {
+    const ref = e.order_no ? `commande #${e.order_no}` : `pièce ${escapeHtml(e.piece)}`;
     const head = `<tr class="cpt-entry-head"><td colspan="5">` +
-      `<b>${e.journal}${String(e.num).padStart(5, "0")}</b> · ${e.date} · pièce ${escapeHtml(e.piece)} — ${escapeHtml(e.label)}</td></tr>`;
+      `<b>${e.journal}${String(e.num).padStart(5, "0")}</b> · ${e.date} · ${ref} — ${escapeHtml(e.label)}</td></tr>`;
     const lines = e.lines.map((l) =>
       `<tr><td class="cpt-acc">${escapeHtml(l.account)}</td>` +
       `<td>${escapeHtml(l.account_lib)}</td>` +
