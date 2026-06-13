@@ -61,7 +61,7 @@ from src.vision import IMAGE_MEDIA_TYPES, analyze_product_folder
 from src import shops
 from src.shops import use_shop
 
-from . import competitors, easypic, finance, jobs, niche, niche_tracker
+from . import accounting, competitors, easypic, finance, jobs, niche, niche_tracker
 
 ROOT = Path(__file__).resolve().parent.parent          # etsy-auto-lister/
 FLOW_DIR = ROOT.parent / "flow-automation"             # Google Flow automation
@@ -87,6 +87,14 @@ async def _finance_error_handler(
     _request: Request, exc: finance.FinanceError
 ) -> JSONResponse:
     """Erreurs métier de l'onglet Ventes (sync Etsy, validations) → JSON propre."""
+    return JSONResponse(status_code=exc.status, content={"detail": exc.detail})
+
+
+@app.exception_handler(accounting.AccountingError)
+async def _accounting_error_handler(
+    _request: Request, exc: accounting.AccountingError
+) -> JSONResponse:
+    """Erreurs métier de l'onglet Comptabilité → JSON propre."""
     return JSONResponse(status_code=exc.status, content={"detail": exc.detail})
 
 
@@ -1603,6 +1611,61 @@ def finance_ads_delete(day: str) -> dict:
     if not finance.ads_delete(day):
         raise HTTPException(status_code=404, detail="Aucune dépense pub à cette date.")
     return {"deleted": day}
+
+
+# --------------------------------------------------------------------------- #
+# Comptabilité PCG : écritures (journal ventes + achats), grand livre, export.
+# Génère les écritures en partie double depuis les données Ventes ; lecture
+# seule, aucune écriture Etsy. Outil de préparation — à valider par un
+# expert-comptable (TVA transfrontalière notamment).
+# --------------------------------------------------------------------------- #
+class AcctConfigReq(BaseModel):
+    vat_enabled: bool | None = None
+    vat_rate: float | None = None
+    # {clé_compte: "code"} — ex. {"ventes": "707", "commission": "6221"}
+    accounts: dict[str, str] | None = None
+
+
+@app.get("/api/accounting/config")
+def accounting_config() -> dict:
+    return accounting.get_config()
+
+
+@app.put("/api/accounting/config")
+def accounting_put_config(req: AcctConfigReq) -> dict:
+    return accounting.save_config(req.model_dump(exclude_unset=True))
+
+
+@app.get("/api/accounting/journal")
+def accounting_journal(days: int = 365, shop: str | None = None) -> dict:
+    """Journaux des ventes + achats + grand livre sur la période."""
+    return accounting.generate(days=days, shop=shop)
+
+
+@app.get("/api/accounting/export.fec")
+def accounting_export_fec(days: int = 365, shop: str | None = None):
+    """Export FEC (Fichier des Écritures Comptables, format légal français)."""
+    data = accounting.generate(days=days, shop=shop)
+    text = accounting.to_fec(data)
+    stamp = time.strftime("%Y%m%d")
+    return Response(
+        content=text,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="FEC_{stamp}.txt"'},
+    )
+
+
+@app.get("/api/accounting/export.csv")
+def accounting_export_csv(days: int = 365, shop: str | None = None):
+    """Export CSV lisible (Excel) des écritures."""
+    data = accounting.generate(days=days, shop=shop)
+    text = accounting.to_csv(data)
+    stamp = time.strftime("%Y%m%d")
+    return Response(
+        content=text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="ecritures_{stamp}.csv"'},
+    )
 
 
 # Serve the single-page frontend for everything else.

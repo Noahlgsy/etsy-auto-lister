@@ -106,6 +106,12 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT
 );
 
+-- Configuration comptable (plan de comptes PCG + TVA). Clé/valeur texte.
+CREATE TABLE IF NOT EXISTS acct_config (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
 -- Cache des vignettes produits (URL CDN Etsy résolue une fois par listing).
 CREATE TABLE IF NOT EXISTS listing_images (
     listing_id  INTEGER PRIMARY KEY,
@@ -503,6 +509,25 @@ def _orders_window(
         costs = _product_cost_map(conn)
         rows = conn.execute(sql, args).fetchall()
     return [_compute(r, st, costs, with_address=with_address) for r in rows]
+
+
+def computed_orders(days: int, shop: str | None = None, country: str | None = None) -> list[dict]:
+    """Commandes de la fenêtre avec tous les champs calculés (frais/COGS/net).
+
+    Exposé pour le module comptable (génération des écritures). Inclut les
+    commandes annulées (champ ``excluded``) — au consommateur de filtrer.
+    """
+    return _orders_window(days, shop, country)
+
+
+def settings_snapshot() -> dict[str, float]:
+    """Réglages de frais courants (pour le calcul comptable des charges Etsy)."""
+    return get_settings()
+
+
+def ads_entries(days: int = 365) -> list[dict]:
+    """Dépenses pub par jour (pour le journal d'achats — compte 6231)."""
+    return ads_list(days=days)["entries"]
 
 
 def _ads_total(days: int, *, until_ts: int | None = None) -> float:

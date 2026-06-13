@@ -19,6 +19,7 @@
     <nav class="nav">
       <button class="nav-btn active" data-view="atelier">Atelier</button>
       <button class="nav-btn" data-view="ventes">Ventes</button>
+      <button class="nav-btn" data-view="compta">Comptabilité</button>
       <button class="nav-btn" data-view="easypic">Easy picture</button>
       <button class="nav-btn" data-view="tags">Tag Searcher</button>
       <button class="nav-btn" data-view="concurrents">Concurrents</button>
@@ -344,6 +345,78 @@
             </div>
             <p class="hint">L'ID est dans l'URL de l'annonce — etsy.com/listing/<b>123456789</b>/… — ou dans le lien « Ouvrir sur Etsy » d'un brouillon créé par l'app.</p>
             <div id="fin-products" class="fin-products"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- =============== VUE COMPTABILITÉ (PCG) =============== -->
+      <div id="view-compta" class="view hidden">
+        <div class="view-head">
+          <h2>Comptabilité <span class="muted small">— écritures PCG</span></h2>
+          <p class="muted">Journal des ventes &amp; des achats en partie double, depuis tes commandes Etsy.
+            Export FEC (format légal). Lecture seule — rien n'est écrit sur Etsy.</p>
+        </div>
+
+        <div class="cpt-warn">
+          ⚠️ Écritures <b>préparées automatiquement</b> pour faire gagner du temps à ta compta —
+          elles ne remplacent pas un expert-comptable. Vérifie le plan de comptes, et surtout le
+          traitement de la <b>TVA transfrontalière</b> (ventes hors France / OSS) avec un professionnel.
+        </div>
+
+        <div class="card fin-toolbar">
+          <div class="fin-tabs">
+            <button class="cpt-tab active" data-cpttab="ventes" type="button">Journal des ventes</button>
+            <button class="cpt-tab" data-cpttab="achats" type="button">Journal des achats</button>
+            <button class="cpt-tab" data-cpttab="grandlivre" type="button">Grand livre</button>
+            <button class="cpt-tab" data-cpttab="reglages" type="button">Plan de comptes</button>
+          </div>
+          <div class="fin-filters">
+            <select id="cpt-days" title="Période">
+              <option value="30">30 jours</option>
+              <option value="90">90 jours</option>
+              <option value="365" selected>Année</option>
+              <option value="1095">3 ans</option>
+            </select>
+            <button id="cpt-export-fec" class="primary small-btn" title="Fichier des Écritures Comptables (format légal)">⬇ FEC</button>
+            <button id="cpt-export-csv" class="ghost small-btn" title="Export tableur lisible">⬇ CSV</button>
+          </div>
+        </div>
+        <p id="cpt-balance" class="cpt-balance"></p>
+
+        <!-- Journaux (ventes / achats) -->
+        <div id="cpt-journal" class="card hidden">
+          <div id="cpt-journal-body"></div>
+        </div>
+
+        <!-- Grand livre -->
+        <div id="cpt-grandlivre" class="card hidden">
+          <div id="cpt-grandlivre-body"></div>
+        </div>
+
+        <!-- Plan de comptes + TVA -->
+        <div id="cpt-reglages" class="hidden">
+          <div class="grid-2 fin-grid">
+            <div class="card">
+              <h3>TVA</h3>
+              <label class="switch">
+                <input type="checkbox" id="cpt-vat-enabled" />
+                <span class="track"></span>
+                <span class="switch-label">Assujetti à la TVA <span class="muted small">(génère TVA collectée sur les ventes)</span></span>
+              </label>
+              <div class="field" style="margin-top:12px;max-width:200px">
+                <label for="cpt-vat-rate">Taux de TVA (%)</label>
+                <input id="cpt-vat-rate" type="number" step="0.1" min="0" max="100" />
+              </div>
+              <p class="muted small">Désactivé = franchise en base (« TVA non applicable, art. 293 B du CGI »).
+                La TVA transfrontalière (OSS) n'est pas calculée automatiquement.</p>
+              <div class="row-end"><button id="cpt-vat-save" class="primary small-btn" type="button">Enregistrer</button></div>
+            </div>
+            <div class="card">
+              <h3>Plan de comptes PCG</h3>
+              <p class="muted small">Codes des comptes utilisés dans les écritures. Modifie-les pour coller au plan de ton expert-comptable.</p>
+              <div id="cpt-accounts" class="cpt-accounts"></div>
+              <div class="row-end"><button id="cpt-acc-save" class="primary small-btn" type="button">Enregistrer les comptes</button></div>
+            </div>
           </div>
         </div>
       </div>

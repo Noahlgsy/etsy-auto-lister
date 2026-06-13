@@ -169,7 +169,7 @@ function formatEta(seconds) {
 }
 
 // ---- views ----------------------------------------------------------------
-const ALL_VIEWS = ["atelier", "produit", "ventes", "easypic", "reglages", "tags", "concurrents", "telecharges", "niches"];
+const ALL_VIEWS = ["atelier", "produit", "ventes", "compta", "easypic", "reglages", "tags", "concurrents", "telecharges", "niches"];
 function showView(name) {
   ALL_VIEWS.forEach((v) => {
     const el = $(`#view-${v}`);
@@ -184,6 +184,7 @@ function showView(name) {
     checkServices();
   }
   if (name === "ventes") finOpen();
+  if (name === "compta") cptOpen();
   if (name === "easypic") loadEasypic();
   if (name === "telecharges") loadDownloaded();
   if (name === "niches") { loadVerticals(); loadSavedNiches(); }
@@ -3079,6 +3080,182 @@ function finInit() {
   if (adDay) adDay.valueAsDate = new Date();
 }
 
+// ===========================================================================
+//  Comptabilité PCG — journaux ventes/achats, grand livre, export FEC.
+//  Lecture seule : génère les écritures depuis les données Ventes, rien n'est
+//  écrit sur Etsy. Outil de préparation à valider par un expert-comptable.
+// ===========================================================================
+const cptState = { days: 365, tab: "ventes", data: null, config: null };
+
+function cptShopQ() {
+  return state.activeShop ? `&shop=${enc(state.activeShop)}` : "";
+}
+
+function cptMoney(v) {
+  const n = Number(v);
+  if (!isFinite(n) || n === 0) return "";
+  return n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+async function cptOpen() {
+  cptShowTab(cptState.tab);
+  await Promise.all([cptLoadJournal(), cptLoadConfig()]);
+}
+
+function cptShowTab(tab) {
+  cptState.tab = tab;
+  $$(".cpt-tab").forEach((b) => b.classList.toggle("active", b.dataset.cpttab === tab));
+  const isJournal = tab === "ventes" || tab === "achats";
+  $("#cpt-journal").classList.toggle("hidden", !isJournal);
+  $("#cpt-grandlivre").classList.toggle("hidden", tab !== "grandlivre");
+  $("#cpt-reglages").classList.toggle("hidden", tab !== "reglages");
+  if (isJournal) cptRenderJournal();
+  if (tab === "grandlivre") cptRenderLedger();
+}
+
+async function cptLoadJournal() {
+  try {
+    cptState.data = await api(`/api/accounting/journal?days=${cptState.days}${cptShopQ()}`);
+    cptRenderBalance();
+    if (cptState.tab === "ventes" || cptState.tab === "achats") cptRenderJournal();
+    if (cptState.tab === "grandlivre") cptRenderLedger();
+  } catch (e) { toast("Comptabilité : " + e.message, true); }
+}
+
+function cptRenderBalance() {
+  const d = cptState.data;
+  if (!d) { $("#cpt-balance").textContent = ""; return; }
+  const t = d.summary.total;
+  const vatTxt = d.vat_enabled ? `TVA ${d.vat_rate} %` : "Franchise en base (sans TVA)";
+  const eq = t.balanced
+    ? `<span class="cpt-ok">✓ équilibré</span>`
+    : `<span class="cpt-bad">⚠ déséquilibre</span>`;
+  $("#cpt-balance").innerHTML =
+    `${vatTxt} · ${d.summary.ventes.entries} ventes · ${d.summary.achats.entries} achats · ` +
+    `total débit ${cptMoney(t.debit)} € = crédit ${cptMoney(t.credit)} € ${eq}`;
+}
+
+function cptRenderJournal() {
+  const d = cptState.data;
+  const box = $("#cpt-journal-body");
+  if (!d) { box.innerHTML = `<p class="muted">Chargement…</p>`; return; }
+  const entries = cptState.tab === "ventes" ? d.ventes : d.achats;
+  const sum = cptState.tab === "ventes" ? d.summary.ventes : d.summary.achats;
+  if (!entries.length) {
+    box.innerHTML = `<p class="muted">Aucune écriture sur la période — synchronise tes ventes d'abord.</p>`;
+    return;
+  }
+  const rows = entries.map((e) => {
+    const head = `<tr class="cpt-entry-head"><td colspan="5">` +
+      `<b>${e.journal}${String(e.num).padStart(5, "0")}</b> · ${e.date} · pièce ${escapeHtml(e.piece)} — ${escapeHtml(e.label)}</td></tr>`;
+    const lines = e.lines.map((l) =>
+      `<tr><td class="cpt-acc">${escapeHtml(l.account)}</td>` +
+      `<td>${escapeHtml(l.account_lib)}</td>` +
+      `<td class="num">${cptMoney(l.debit)}</td>` +
+      `<td class="num">${cptMoney(l.credit)}</td></tr>`
+    ).join("");
+    return head + lines;
+  }).join("");
+  box.innerHTML = `<table class="cpt-table"><thead><tr>` +
+    `<th>Compte</th><th>Libellé</th><th class="num">Débit</th><th class="num">Crédit</th></tr></thead>` +
+    `<tbody>${rows}</tbody>` +
+    `<tfoot><tr><td colspan="2">Total ${cptState.tab === "ventes" ? "ventes" : "achats"} (${sum.entries} écritures)</td>` +
+    `<td class="num">${cptMoney(sum.debit)}</td><td class="num">${cptMoney(sum.credit)}</td></tr></tfoot></table>`;
+}
+
+function cptRenderLedger() {
+  const d = cptState.data;
+  const box = $("#cpt-grandlivre-body");
+  if (!d) { box.innerHTML = `<p class="muted">Chargement…</p>`; return; }
+  if (!d.totals.length) { box.innerHTML = `<p class="muted">Aucun mouvement.</p>`; return; }
+  const rows = d.totals.map((t) =>
+    `<tr><td class="cpt-acc">${escapeHtml(t.account)}</td>` +
+    `<td>${escapeHtml(t.label)}</td>` +
+    `<td class="num">${cptMoney(t.debit)}</td>` +
+    `<td class="num">${cptMoney(t.credit)}</td>` +
+    `<td class="num ${t.balance < 0 ? "neg" : ""}">${cptMoney(t.balance) || "0,00"}</td></tr>`
+  ).join("");
+  const t = d.summary.total;
+  box.innerHTML = `<table class="cpt-table"><thead><tr>` +
+    `<th>Compte</th><th>Libellé</th><th class="num">Débit</th><th class="num">Crédit</th><th class="num">Solde</th></tr></thead>` +
+    `<tbody>${rows}</tbody>` +
+    `<tfoot><tr><td colspan="2">Total général</td>` +
+    `<td class="num">${cptMoney(t.debit)}</td><td class="num">${cptMoney(t.credit)}</td>` +
+    `<td class="num">${t.balanced ? "0,00" : "⚠"}</td></tr></tfoot></table>`;
+}
+
+async function cptLoadConfig() {
+  try {
+    cptState.config = await api("/api/accounting/config");
+    $("#cpt-vat-enabled").checked = cptState.config.vat_enabled;
+    $("#cpt-vat-rate").value = cptState.config.vat_rate;
+    cptRenderAccounts();
+  } catch (e) { toast("Config compta : " + e.message, true); }
+}
+
+function cptRenderAccounts() {
+  const acc = cptState.config?.accounts || {};
+  $("#cpt-accounts").innerHTML = Object.entries(acc).map(([key, a]) =>
+    `<div class="cpt-acc-row">` +
+    `<input class="cpt-acc-code" data-key="${key}" type="text" value="${escapeHtml(a.code)}" />` +
+    `<span class="cpt-acc-lib">${escapeHtml(a.label)}</span></div>`
+  ).join("");
+}
+
+async function cptSaveVat() {
+  try {
+    await api("/api/accounting/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        vat_enabled: $("#cpt-vat-enabled").checked,
+        vat_rate: Number($("#cpt-vat-rate").value),
+      }),
+    });
+    toast("TVA enregistrée — écritures recalculées.");
+    await cptLoadJournal();
+  } catch (e) { toast("Échec : " + e.message, true); }
+}
+
+async function cptSaveAccounts() {
+  const accounts = {};
+  $$(".cpt-acc-code").forEach((i) => { accounts[i.dataset.key] = i.value.trim(); });
+  try {
+    await api("/api/accounting/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accounts }),
+    });
+    toast("Plan de comptes enregistré.");
+    await Promise.all([cptLoadConfig(), cptLoadJournal()]);
+  } catch (e) { toast("Échec : " + e.message, true); }
+}
+
+function cptExport(fmt) {
+  // Téléchargement direct (l'endpoint renvoie un fichier en pièce jointe).
+  const url = `/api/accounting/export.${fmt}?days=${cptState.days}${cptShopQ()}`;
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  toast(`Export ${fmt.toUpperCase()} lancé.`);
+}
+
+function cptInit() {
+  $$(".cpt-tab").forEach((b) =>
+    b.addEventListener("click", () => cptShowTab(b.dataset.cpttab)));
+  $("#cpt-days").addEventListener("change", () => {
+    cptState.days = Number($("#cpt-days").value);
+    cptLoadJournal();
+  });
+  $("#cpt-export-fec").addEventListener("click", () => cptExport("fec"));
+  $("#cpt-export-csv").addEventListener("click", () => cptExport("csv"));
+  $("#cpt-vat-save").addEventListener("click", cptSaveVat);
+  $("#cpt-acc-save").addEventListener("click", cptSaveAccounts);
+}
+
 function wireDropzone() {
   const dz = $("#dropzone");
   const fi = $("#file-input");
@@ -3131,6 +3308,9 @@ async function init() {
 
   // ventes & résultat net
   finInit();
+
+  // comptabilité PCG
+  cptInit();
 
   // atelier
   wireDropzone();
