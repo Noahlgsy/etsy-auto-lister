@@ -219,6 +219,7 @@
           <div class="fin-tabs">
             <button class="fin-tab active" data-fintab="dash" type="button">Tableau de bord</button>
             <button class="fin-tab" data-fintab="orders" type="button">Commandes <span id="fin-toship" class="mini-badge hidden"></span></button>
+            <button class="fin-tab" data-fintab="treso" type="button">Trésorerie</button>
             <button class="fin-tab" data-fintab="costs" type="button">Coûts &amp; frais</button>
           </div>
           <div class="fin-filters">
@@ -277,6 +278,26 @@
             <div class="row-end">
               <button id="fin-more" class="ghost small-btn hidden" type="button">Charger plus</button>
             </div>
+          </div>
+        </div>
+
+        <!-- Sous-vue : trésorerie (échéancier entrées / sorties) -->
+        <div id="fin-treso" class="hidden">
+          <div id="fin-treso-kpis" class="fin-kpis"></div>
+          <div class="card">
+            <h3>Solde de trésorerie <span class="muted small">cumulé sur la période (départ à 0)</span></h3>
+            <div id="fin-treso-balance" class="fin-chart"></div>
+          </div>
+          <div class="card">
+            <h3>Entrées &amp; sorties par jour <span class="muted small">entrées = ventes encaissées (CA − frais) · sorties = achats + port + pub</span></h3>
+            <div id="fin-treso-flows" class="fin-chart"></div>
+          </div>
+          <div class="card">
+            <div class="fin-orders-head">
+              <h3 style="margin:0">Mouvements</h3>
+              <span class="muted small">entrées datées à la vente · sorties à la date d'achat</span>
+            </div>
+            <div id="fin-treso-table"></div>
           </div>
         </div>
 

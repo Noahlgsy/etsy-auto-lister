@@ -2578,6 +2578,7 @@ async function finRefresh(statusToo = true) {
   if (statusToo) finStatusLine();
   await Promise.all([finLoadSummary(), finLoadTrends()]);
   if (finState.tab === "orders") await finLoadOrders(true);
+  if (finState.tab === "treso") await finLoadCashflow();
   if (finState.tab === "costs") await finLoadCosts();
 }
 
@@ -2603,8 +2604,10 @@ function finShowTab(tab) {
   $$(".fin-tab").forEach((b) => b.classList.toggle("active", b.dataset.fintab === tab));
   $("#fin-dash").classList.toggle("hidden", tab !== "dash");
   $("#fin-orders").classList.toggle("hidden", tab !== "orders");
+  $("#fin-treso").classList.toggle("hidden", tab !== "treso");
   $("#fin-costs").classList.toggle("hidden", tab !== "costs");
   if (tab === "orders") finLoadOrders(true);
+  if (tab === "treso") finLoadCashflow();
   if (tab === "costs") finLoadCosts();
 }
 
@@ -2716,6 +2719,104 @@ function finRenderCharts() {
       title: `${WD[w.weekday]} — ${w.orders} commande(s) · CA ${finMoney(w.revenue, cur)}`,
     })), { maxLabels: 7 });
   $("#fin-countries").innerHTML = finCountryTable(t.by_country, cur);
+}
+
+// ---- trésorerie (échéancier entrées / sorties + solde cumulé) --------------
+async function finLoadCashflow() {
+  try {
+    const d = await api(`/api/finance/cashflow?days=${finState.days}${finShopQ()}`);
+    finState.cashflow = d;
+    finRenderCashflow(d);
+  } catch (e) { toast("Trésorerie : " + e.message, true); }
+}
+
+function finRenderCashflow(d) {
+  const cur = d.currency;
+  const finalBal = d.by_day.length ? d.by_day[d.by_day.length - 1].balance : 0;
+  const cards = [
+    { label: "Entrées (encaissé)", value: finMoney(d.total_in, cur), sub: "ventes − frais Etsy" },
+    { label: "Sorties (décaissé)", value: "− " + finMoney(d.total_out, cur), sub: "achats + port + pub" },
+    { label: "Solde de la période", value: finMoney(finalBal, cur),
+      sub: `sur ${d.days} jours`, hero: true, neg: finalBal < 0 },
+  ];
+  $("#fin-treso-kpis").innerHTML = cards.map((c) =>
+    `<div class="fin-kpi${c.hero ? " hero" : ""}${c.neg ? " neg" : ""}">` +
+    `<span class="fin-kpi-label">${c.label}</span>` +
+    `<span class="fin-kpi-value">${c.value}</span>` +
+    `<span class="fin-kpi-sub">${c.sub}</span></div>`
+  ).join("");
+  $("#fin-treso-balance").innerHTML = finBalanceChart(d.by_day, cur);
+  $("#fin-treso-flows").innerHTML = finFlowBars(d.by_day, cur);
+  $("#fin-treso-table").innerHTML = finCashTable(d.by_day, cur);
+}
+
+// Courbe du solde cumulé (aire sous la ligne, ligne de zéro, valeurs ± ).
+function finBalanceChart(rows, cur) {
+  if (!rows.length) return `<p class="muted small">Aucune donnée.</p>`;
+  const W = 760, H = 180, P = { t: 14, r: 10, b: 22, l: 10 };
+  const iw = W - P.l - P.r, ih = H - P.t - P.b;
+  const lo = Math.min(0, ...rows.map((r) => r.balance));
+  const hi = Math.max(1, ...rows.map((r) => r.balance));
+  const y = (v) => P.t + ih - ((v - lo) / (hi - lo)) * ih;
+  const x = (i) => P.l + (rows.length === 1 ? iw / 2 : (i / (rows.length - 1)) * iw);
+  const y0 = y(0);
+  const pts = rows.map((r, i) => `${x(i).toFixed(1)},${y(r.balance).toFixed(1)}`);
+  const area = `${P.l},${y0.toFixed(1)} ${pts.join(" ")} ${(P.l + iw).toFixed(1)},${y0.toFixed(1)}`;
+  const step = Math.max(1, Math.round(rows.length / 6));
+  let labels = "";
+  rows.forEach((r, i) => {
+    if (i % step !== 0 && i !== rows.length - 1) return;
+    labels += `<text x="${x(i).toFixed(1)}" y="${H - 6}" class="fin-xlab">${r.day.slice(8)}/${r.day.slice(5, 7)}</text>`;
+  });
+  // marqueur du dernier point + sa valeur
+  const last = rows[rows.length - 1];
+  const lx = x(rows.length - 1), ly = y(last.balance);
+  return `<svg viewBox="0 0 ${W} ${H}" class="fin-svg">` +
+    `<polygon points="${area}" class="fin-treso-area"/>` +
+    `<line x1="${P.l}" y1="${y0.toFixed(1)}" x2="${W - P.r}" y2="${y0.toFixed(1)}" class="fin-axis"/>` +
+    `<polyline points="${pts.join(" ")}" class="fin-treso-line"/>` +
+    `<circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="3.5" class="fin-treso-dot"/>` +
+    labels + `</svg>`;
+}
+
+// Barres entrées (vert, vers le haut) / sorties (rouge, vers le bas).
+function finFlowBars(rows, cur) {
+  if (!rows.length) return `<p class="muted small">Aucune donnée.</p>`;
+  const W = 760, H = 170, P = { t: 12, r: 8, b: 22, l: 8 };
+  const iw = W - P.l - P.r, ih = H - P.t - P.b;
+  const max = Math.max(1, ...rows.map((r) => Math.max(r.inflow, r.outflow)));
+  const mid = P.t + ih / 2;
+  const half = ih / 2;
+  const bw = iw / rows.length;
+  let bars = "";
+  rows.forEach((r, i) => {
+    const cx = P.l + i * bw + bw * 0.18;
+    const w = bw * 0.64;
+    if (r.inflow) {
+      const h = (r.inflow / max) * half;
+      bars += `<rect x="${cx.toFixed(1)}" y="${(mid - h).toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(h, 1).toFixed(1)}" rx="1.5" class="fin-flow-in"><title>${r.day} · +${finMoney(r.inflow, cur)}</title></rect>`;
+    }
+    if (r.outflow) {
+      const h = (r.outflow / max) * half;
+      bars += `<rect x="${cx.toFixed(1)}" y="${mid.toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(h, 1).toFixed(1)}" rx="1.5" class="fin-flow-out"><title>${r.day} · −${finMoney(r.outflow, cur)}</title></rect>`;
+    }
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" class="fin-svg">` +
+    `<line x1="${P.l}" y1="${mid.toFixed(1)}" x2="${W - P.r}" y2="${mid.toFixed(1)}" class="fin-axis"/>` +
+    bars + `</svg>`;
+}
+
+function finCashTable(rows, cur) {
+  const moves = rows.filter((r) => r.inflow || r.outflow).reverse();
+  if (!moves.length) return `<p class="muted">Aucun mouvement sur la période.</p>`;
+  return `<table class="fin-table"><thead><tr><th>Date</th>` +
+    `<th class="num">Entrées</th><th class="num">Sorties</th><th class="num">Solde cumulé</th></tr></thead><tbody>` +
+    moves.map((r) =>
+      `<tr><td>${new Date(r.day + "T00:00:00").toLocaleDateString("fr-FR", { weekday: "short", day: "2-digit", month: "short" })}</td>` +
+      `<td class="num fin-in">${r.inflow ? "+" + finMoney(r.inflow, cur) : ""}</td>` +
+      `<td class="num fin-out">${r.outflow ? "−" + finMoney(r.outflow, cur) : ""}</td>` +
+      `<td class="num${r.balance < 0 ? " neg" : ""}">${finMoney(r.balance, cur)}</td></tr>`
+    ).join("") + `</tbody></table>`;
 }
 
 // Barres génériques (heures, jours de semaine). rows: [{label, value, title}].

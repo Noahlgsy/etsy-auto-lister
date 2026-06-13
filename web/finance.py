@@ -705,6 +705,68 @@ def trends(days: int = 30, shop: str | None = None, country: str | None = None) 
     }
 
 
+def cashflow(days: int = 90, shop: str | None = None) -> dict:
+    """Échéancier de trésorerie : entrées vs sorties par jour + solde cumulé.
+
+    Entrée  = encaissement d'une vente = CA − frais Etsy (ce qui tombe vraiment
+              sur le compte), daté au jour de la commande (proxy du versement).
+    Sortie  = achat fournisseur (coût + port) daté à la **date d'achat** saisie
+              (sinon au jour de la vente) + dépenses pub à leur date.
+    Le solde est relatif à la période (départ à 0). Tout en euros.
+    """
+    from collections import defaultdict
+
+    orders = [o for o in computed_orders(days, shop) if not o["excluded"]]
+    until = datetime.now(TZ).date()
+    since = until - timedelta(days=max(1, int(days)) - 1)
+
+    inflow: dict[str, float] = defaultdict(float)
+    outflow: dict[str, float] = defaultdict(float)
+    for o in orders:
+        sale_day = datetime.fromtimestamp(o["created_ts"], TZ).date()
+        inflow[sale_day.isoformat()] += o["revenue"] - o["fees"]
+        # Sortie datée à l'achat fournisseur ; hors période → rattachée à la vente.
+        buy = o.get("purchase_date")
+        try:
+            buy_day = datetime.strptime(buy, "%Y-%m-%d").date() if buy else sale_day
+        except ValueError:
+            buy_day = sale_day
+        if not (since <= buy_day <= until):
+            buy_day = sale_day
+        outflow[buy_day.isoformat()] += o["cogs"] + o["ship_cost"]
+
+    for e in ads_entries(days=days):
+        try:
+            d = datetime.strptime(e["day"], "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if since <= d <= until and e["amount"] > 0:
+            outflow[e["day"]] += e["amount"]
+
+    by_day: list[dict] = []
+    balance = 0.0
+    total_in = total_out = 0.0
+    for i in range(int(days)):
+        d = (since + timedelta(days=i)).isoformat()
+        inn = round(inflow.get(d, 0.0), 2)
+        out = round(outflow.get(d, 0.0), 2)
+        balance = round(balance + inn - out, 2)
+        total_in += inn
+        total_out += out
+        by_day.append({"day": d, "inflow": inn, "outflow": out, "balance": balance})
+
+    currencies = [o["currency"] for o in orders if o.get("currency")]
+    currency = max(set(currencies), key=currencies.count) if currencies else "EUR"
+    return {
+        "days": days,
+        "currency": currency,
+        "total_in": round(total_in, 2),
+        "total_out": round(total_out, 2),
+        "net": round(total_in - total_out, 2),
+        "by_day": by_day,
+    }
+
+
 def list_orders(
     days: int = 30,
     shop: str | None = None,

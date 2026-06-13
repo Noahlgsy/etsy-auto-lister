@@ -1070,3 +1070,14 @@ table.grid td.act .xs { margin-left: 6px; }
 .fin-od-cost .fin-costcur { width: auto; flex: none; padding: 8px 8px; font-size: 13px; }
 .fin-od-cost .fin-purchasedate { width: auto; flex: none; padding: 7px 9px; font-size: 13px; }
 .fin-od-date-lbl { font-weight: 600; color: var(--muted); font-size: 12px; }
+
+/* ---------- Trésorerie ---------- */
+.fin-treso-area { fill: rgba(31,138,82,.10); stroke: none; }
+.fin-treso-line { fill: none; stroke: #1f8a52; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.fin-treso-dot { fill: #1f8a52; }
+.fin-flow-in { fill: var(--ok); opacity: .78; }
+.fin-flow-in:hover { opacity: 1; }
+.fin-flow-out { fill: var(--err); opacity: .72; }
+.fin-flow-out:hover { opacity: 1; }
+.fin-table .fin-in { color: var(--ok); font-weight: 600; }
+.fin-table .fin-out { color: var(--err); font-weight: 600; }

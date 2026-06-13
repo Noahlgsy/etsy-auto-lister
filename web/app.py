@@ -1552,6 +1552,12 @@ def finance_trends(days: int = 30, shop: str | None = None, country: str | None 
     return finance.trends(days=days, shop=shop, country=country)
 
 
+@app.get("/api/finance/cashflow")
+def finance_cashflow(days: int = 90, shop: str | None = None) -> dict:
+    """Échéancier de trésorerie : entrées/sorties par jour + solde cumulé."""
+    return finance.cashflow(days=days, shop=shop)
+
+
 @app.get("/api/finance/orders")
 def finance_orders(
     days: int = 30,
