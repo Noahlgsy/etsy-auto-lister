@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "etsy-auto-lister",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["-m", "web.app"],
+      "port": 8000
+    }
+  ]
+}

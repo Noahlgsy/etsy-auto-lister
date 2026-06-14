@@ -26,3 +26,12 @@ batch.txt
 taxonomy_cache.json
 data/competitors/
 data/easypic/
+
+# ── Base locale ventes/finances (données perso, jamais versionnées) ──
+data/finance.db
+data/finance.db-wal
+data/finance.db-shm
+data/listing_thumbs/
+
+# ── Claude Code local ───────────────────────────────────
+.claude/settings.local.json

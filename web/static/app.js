@@ -169,7 +169,7 @@ function formatEta(seconds) {
 }
 
 // ---- views ----------------------------------------------------------------
-const ALL_VIEWS = ["atelier", "produit", "easypic", "reglages", "tags", "concurrents", "telecharges", "niches"];
+const ALL_VIEWS = ["atelier", "produit", "ventes", "compta", "easypic", "reglages", "tags", "concurrents", "telecharges", "niches"];
 function showView(name) {
   ALL_VIEWS.forEach((v) => {
     const el = $(`#view-${v}`);
@@ -183,6 +183,8 @@ function showView(name) {
     fillConfigForm();
     checkServices();
   }
+  if (name === "ventes") finOpen();
+  if (name === "compta") cptOpen();
   if (name === "easypic") loadEasypic();
   if (name === "telecharges") loadDownloaded();
   if (name === "niches") { loadVerticals(); loadSavedNiches(); }
@@ -2499,6 +2501,930 @@ async function removeSavedNiche(term) {
 }
 
 // ---- init -----------------------------------------------------------------
+// ===========================================================================
+//  Ventes & résultat net — commandes Etsy synchronisées, coûts, tendances.
+//  Le suivi d'expédition (statut, n° de suivi) est 100 % LOCAL : rien n'est
+//  jamais écrit sur Etsy depuis cet onglet.
+// ===========================================================================
+const finState = {
+  days: 30,
+  country: "",
+  ship: "all",      // filtre commandes : all | to_ship | shipped
+  tab: "dash",      // sous-onglet : dash | orders | costs
+  offset: 0,
+  limit: 50,
+  total: 0,
+  summary: null,
+  trends: null,
+};
+
+function finShopQ() {
+  return state.activeShop ? `&shop=${enc(state.activeShop)}` : "";
+}
+
+// Devises proposées pour le coût d'achat d'une commande (code → symbole).
+const CUR_SYM = { EUR: "€", USD: "$", GBP: "£", CHF: "CHF", CNY: "¥" };
+function curOptions(selected) {
+  const sel = (selected || "EUR").toUpperCase();
+  return Object.entries(CUR_SYM).map(([c, s]) =>
+    `<option value="${c}" ${c === sel ? "selected" : ""}>${s} ${c}</option>`
+  ).join("");
+}
+
+// Indice sous le champ prix d'achat : conversion en € si devise étrangère.
+function cptCostHint(o, cur) {
+  if (o.cost_override == null) {
+    return o.cost_auto ? `vide = coût produit auto (${finMoney(o.cost_auto, cur)})`
+                       : "remplace le coût produit pour le net";
+  }
+  if (o.cost_currency && o.cost_currency !== "EUR") {
+    const sym = CUR_SYM[o.cost_currency] || o.cost_currency;
+    return `${o.cost_override} ${sym} → ${finMoney(o.cogs, cur)} · saisi`;
+  }
+  return "saisi — prime sur le coût produit";
+}
+
+function finMoney(v, cur) {
+  if (v == null || !isFinite(Number(v))) return "—";
+  const sym = (cur || "EUR") === "EUR" ? "€" : cur === "GBP" ? "£" : "$";
+  return Number(v).toLocaleString("fr-FR", {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  }) + " " + sym;
+}
+
+function flagEmoji(iso) {
+  if (!iso || iso.length !== 2 || /[^A-Z]/.test(iso)) return "🌍";
+  return String.fromCodePoint(...[...iso].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
+}
+
+const REGION_FR = (typeof Intl !== "undefined" && Intl.DisplayNames)
+  ? new Intl.DisplayNames(["fr"], { type: "region" }) : null;
+function countryName(iso) {
+  if (!iso || iso === "??") return "Inconnu";
+  try { return (REGION_FR && REGION_FR.of(iso)) || iso; } catch (_) { return iso; }
+}
+
+function finAgo(ts) {
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 90) return "à l'instant";
+  if (s < 3600) return `il y a ${Math.round(s / 60)} min`;
+  if (s < 86400) return `il y a ${Math.round(s / 3600)} h`;
+  return `il y a ${Math.round(s / 86400)} j`;
+}
+
+function finOpen() { finRefresh(); }
+
+async function finRefresh(statusToo = true) {
+  if (statusToo) finStatusLine();
+  await Promise.all([finLoadSummary(), finLoadTrends()]);
+  if (finState.tab === "orders") await finLoadOrders(true);
+  if (finState.tab === "treso") await finLoadCashflow();
+  if (finState.tab === "costs") await finLoadCosts();
+}
+
+async function finStatusLine() {
+  const el = $("#fin-substatus");
+  try {
+    const st = await api("/api/finance/status");
+    if (!st.shops.length) {
+      el.textContent = st.total_orders
+        ? `Aucune boutique Etsy configurée — affichage des ${st.total_orders} commandes locales (démo ?).`
+        : "Aucune boutique Etsy configurée : renseigne .env puis lance « python -m src.auth », et re-synchronise.";
+      return;
+    }
+    el.textContent = st.shops.map((s) =>
+      `${s.label} : ${s.orders} commande${s.orders > 1 ? "s" : ""}` +
+      (s.last_sync_ts ? ` · synchro ${finAgo(s.last_sync_ts)}` : " · jamais synchronisée")
+    ).join("  —  ");
+  } catch (_) { el.textContent = ""; }
+}
+
+function finShowTab(tab) {
+  finState.tab = tab;
+  $$(".fin-tab").forEach((b) => b.classList.toggle("active", b.dataset.fintab === tab));
+  $("#fin-dash").classList.toggle("hidden", tab !== "dash");
+  $("#fin-orders").classList.toggle("hidden", tab !== "orders");
+  $("#fin-treso").classList.toggle("hidden", tab !== "treso");
+  $("#fin-costs").classList.toggle("hidden", tab !== "costs");
+  if (tab === "orders") finLoadOrders(true);
+  if (tab === "treso") finLoadCashflow();
+  if (tab === "costs") finLoadCosts();
+}
+
+// ---- synchro Etsy ----------------------------------------------------------
+async function finSync() {
+  const btn = $("#fin-sync");
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spin"></span>Synchro…`;
+  try {
+    const d = await api(`/api/finance/sync${state.activeShop ? `?shop=${enc(state.activeShop)}` : ""}`,
+      { method: "POST" });
+    toast(`${d.synced} commande(s) synchronisée(s) depuis Etsy.`);
+    await finRefresh();
+  } catch (e) {
+    toast("Synchro : " + e.message, true);
+    $("#fin-substatus").textContent = e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+// ---- KPIs ------------------------------------------------------------------
+async function finLoadSummary() {
+  try {
+    const d = await api(`/api/finance/summary?days=${finState.days}${finShopQ()}` +
+      (finState.country ? `&country=${enc(finState.country)}` : ""));
+    finState.summary = d;
+    finRenderKpis();
+    const b = $("#fin-toship");
+    b.textContent = d.to_ship;
+    b.classList.toggle("hidden", !d.to_ship);
+  } catch (e) { toast("Ventes : " + e.message, true); }
+}
+
+function finDelta(cur, prev) {
+  if (!prev) return "";
+  const pct = ((cur - prev) / Math.abs(prev)) * 100;
+  if (!isFinite(pct) || Math.abs(pct) < 0.5) return "";
+  const up = pct >= 0;
+  return ` <span class="fin-delta ${up ? "up" : "down"}">${up ? "▲" : "▼"} ${Math.abs(pct).toFixed(0)} %</span>`;
+}
+
+function finRenderKpis() {
+  const s = finState.summary;
+  if (!s) return;
+  const cur = s.currency;
+  const cards = [
+    { label: "Chiffre d'affaires", value: finMoney(s.revenue, cur),
+      sub: `${s.orders} cmd · ${s.items} articles${finDelta(s.revenue, s.prev.revenue)}` },
+    { label: "Frais Etsy", value: "− " + finMoney(s.fees, cur),
+      sub: "commission · paiement · listing" },
+    { label: "Coût produits", value: "− " + finMoney(s.cogs, cur),
+      sub: s.cogs_missing_count
+        ? `⚠ ${s.cogs_missing_count} cmd sans coût saisi`
+        : "coûts de revient saisis",
+      warn: !!s.cogs_missing_count },
+    { label: "Port payé", value: "− " + finMoney(s.shipping_cost, cur),
+      sub: "frais d'envoi réels" },
+    { label: "Pub (Etsy Ads)", value: "− " + finMoney(s.ads, cur),
+      sub: "dépenses saisies" },
+    { label: "Résultat net", value: finMoney(s.net, cur),
+      sub: (s.margin_pct != null ? `marge ${s.margin_pct} %` : "—") + finDelta(s.net, s.prev.net),
+      hero: true, neg: s.net < 0 },
+  ];
+  $("#fin-kpis").innerHTML = cards.map((c) =>
+    `<div class="fin-kpi${c.hero ? " hero" : ""}${c.neg ? " neg" : ""}${c.warn ? " warn" : ""}"` +
+    `${c.warn ? ' title="Clique pour saisir les coûts produits"' : ""}>` +
+    `<span class="fin-kpi-label">${c.label}</span>` +
+    `<span class="fin-kpi-value">${c.value}</span>` +
+    `<span class="fin-kpi-sub">${c.sub || ""}</span></div>`
+  ).join("");
+}
+
+// ---- tendances (graphes SVG) ----------------------------------------------
+async function finLoadTrends() {
+  try {
+    const d = await api(`/api/finance/trends?days=${finState.days}${finShopQ()}` +
+      (finState.country ? `&country=${enc(finState.country)}` : ""));
+    finState.trends = d;
+    finFillCountrySelect(d.by_country);
+    finRenderCharts();
+  } catch (e) { toast("Tendances : " + e.message, true); }
+}
+
+function finFillCountrySelect(byCountry) {
+  const sel = $("#fin-country");
+  sel.innerHTML = `<option value="">🌍 Tous pays</option>` + byCountry.map((c) =>
+    `<option value="${c.country}">${flagEmoji(c.country)} ${escapeHtml(countryName(c.country))} (${c.orders})</option>`
+  ).join("");
+  sel.value = finState.country;
+}
+
+function finRenderCharts() {
+  const t = finState.trends;
+  if (!t) return;
+  const cur = (finState.summary && finState.summary.currency) || "EUR";
+  $("#fin-chart-days").innerHTML = finChartDays(t.by_day, cur);
+  $("#fin-chart-hours").innerHTML = finBars(
+    t.by_hour.map((h) => ({
+      label: `${h.hour}h`, value: h.orders,
+      title: `${h.hour} h — ${h.orders} commande(s) · CA ${finMoney(h.revenue, cur)}`,
+    })), { maxLabels: 12 });
+  const WD = ["lun", "mar", "mer", "jeu", "ven", "sam", "dim"];
+  $("#fin-chart-weekdays").innerHTML = finBars(
+    t.by_weekday.map((w) => ({
+      label: WD[w.weekday], value: w.orders,
+      title: `${WD[w.weekday]} — ${w.orders} commande(s) · CA ${finMoney(w.revenue, cur)}`,
+    })), { maxLabels: 7 });
+  $("#fin-countries").innerHTML = finCountryTable(t.by_country, cur);
+}
+
+// ---- trésorerie (échéancier entrées / sorties + solde cumulé) --------------
+async function finLoadCashflow() {
+  try {
+    const d = await api(`/api/finance/cashflow?days=${finState.days}${finShopQ()}`);
+    finState.cashflow = d;
+    finRenderCashflow(d);
+  } catch (e) { toast("Trésorerie : " + e.message, true); }
+}
+
+function finRenderCashflow(d) {
+  const cur = d.currency;
+  const finalBal = d.by_day.length ? d.by_day[d.by_day.length - 1].balance : 0;
+  const cards = [
+    { label: "Entrées (encaissé)", value: finMoney(d.total_in, cur), sub: "ventes − frais Etsy" },
+    { label: "Sorties (décaissé)", value: "− " + finMoney(d.total_out, cur), sub: "achats + port + pub" },
+    { label: "Solde de la période", value: finMoney(finalBal, cur),
+      sub: `sur ${d.days} jours`, hero: true, neg: finalBal < 0 },
+  ];
+  $("#fin-treso-kpis").innerHTML = cards.map((c) =>
+    `<div class="fin-kpi${c.hero ? " hero" : ""}${c.neg ? " neg" : ""}">` +
+    `<span class="fin-kpi-label">${c.label}</span>` +
+    `<span class="fin-kpi-value">${c.value}</span>` +
+    `<span class="fin-kpi-sub">${c.sub}</span></div>`
+  ).join("");
+  $("#fin-treso-balance").innerHTML = finBalanceChart(d.by_day, cur);
+  $("#fin-treso-flows").innerHTML = finFlowBars(d.by_day, cur);
+  $("#fin-treso-table").innerHTML = finCashTable(d.by_day, cur);
+}
+
+// Courbe du solde cumulé (aire sous la ligne, ligne de zéro, valeurs ± ).
+function finBalanceChart(rows, cur) {
+  if (!rows.length) return `<p class="muted small">Aucune donnée.</p>`;
+  const W = 760, H = 180, P = { t: 14, r: 10, b: 22, l: 10 };
+  const iw = W - P.l - P.r, ih = H - P.t - P.b;
+  const lo = Math.min(0, ...rows.map((r) => r.balance));
+  const hi = Math.max(1, ...rows.map((r) => r.balance));
+  const y = (v) => P.t + ih - ((v - lo) / (hi - lo)) * ih;
+  const x = (i) => P.l + (rows.length === 1 ? iw / 2 : (i / (rows.length - 1)) * iw);
+  const y0 = y(0);
+  const pts = rows.map((r, i) => `${x(i).toFixed(1)},${y(r.balance).toFixed(1)}`);
+  const area = `${P.l},${y0.toFixed(1)} ${pts.join(" ")} ${(P.l + iw).toFixed(1)},${y0.toFixed(1)}`;
+  const step = Math.max(1, Math.round(rows.length / 6));
+  let labels = "";
+  rows.forEach((r, i) => {
+    if (i % step !== 0 && i !== rows.length - 1) return;
+    labels += `<text x="${x(i).toFixed(1)}" y="${H - 6}" class="fin-xlab">${r.day.slice(8)}/${r.day.slice(5, 7)}</text>`;
+  });
+  // marqueur du dernier point + sa valeur
+  const last = rows[rows.length - 1];
+  const lx = x(rows.length - 1), ly = y(last.balance);
+  return `<svg viewBox="0 0 ${W} ${H}" class="fin-svg">` +
+    `<polygon points="${area}" class="fin-treso-area"/>` +
+    `<line x1="${P.l}" y1="${y0.toFixed(1)}" x2="${W - P.r}" y2="${y0.toFixed(1)}" class="fin-axis"/>` +
+    `<polyline points="${pts.join(" ")}" class="fin-treso-line"/>` +
+    `<circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="3.5" class="fin-treso-dot"/>` +
+    labels + `</svg>`;
+}
+
+// Barres entrées (vert, vers le haut) / sorties (rouge, vers le bas).
+function finFlowBars(rows, cur) {
+  if (!rows.length) return `<p class="muted small">Aucune donnée.</p>`;
+  const W = 760, H = 170, P = { t: 12, r: 8, b: 22, l: 8 };
+  const iw = W - P.l - P.r, ih = H - P.t - P.b;
+  const max = Math.max(1, ...rows.map((r) => Math.max(r.inflow, r.outflow)));
+  const mid = P.t + ih / 2;
+  const half = ih / 2;
+  const bw = iw / rows.length;
+  let bars = "";
+  rows.forEach((r, i) => {
+    const cx = P.l + i * bw + bw * 0.18;
+    const w = bw * 0.64;
+    if (r.inflow) {
+      const h = (r.inflow / max) * half;
+      bars += `<rect x="${cx.toFixed(1)}" y="${(mid - h).toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(h, 1).toFixed(1)}" rx="1.5" class="fin-flow-in"><title>${r.day} · +${finMoney(r.inflow, cur)}</title></rect>`;
+    }
+    if (r.outflow) {
+      const h = (r.outflow / max) * half;
+      bars += `<rect x="${cx.toFixed(1)}" y="${mid.toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(h, 1).toFixed(1)}" rx="1.5" class="fin-flow-out"><title>${r.day} · −${finMoney(r.outflow, cur)}</title></rect>`;
+    }
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" class="fin-svg">` +
+    `<line x1="${P.l}" y1="${mid.toFixed(1)}" x2="${W - P.r}" y2="${mid.toFixed(1)}" class="fin-axis"/>` +
+    bars + `</svg>`;
+}
+
+function finCashTable(rows, cur) {
+  const moves = rows.filter((r) => r.inflow || r.outflow).reverse();
+  if (!moves.length) return `<p class="muted">Aucun mouvement sur la période.</p>`;
+  return `<table class="fin-table"><thead><tr><th>Date</th>` +
+    `<th class="num">Entrées</th><th class="num">Sorties</th><th class="num">Solde cumulé</th></tr></thead><tbody>` +
+    moves.map((r) =>
+      `<tr><td>${new Date(r.day + "T00:00:00").toLocaleDateString("fr-FR", { weekday: "short", day: "2-digit", month: "short" })}</td>` +
+      `<td class="num fin-in">${r.inflow ? "+" + finMoney(r.inflow, cur) : ""}</td>` +
+      `<td class="num fin-out">${r.outflow ? "−" + finMoney(r.outflow, cur) : ""}</td>` +
+      `<td class="num${r.balance < 0 ? " neg" : ""}">${finMoney(r.balance, cur)}</td></tr>`
+    ).join("") + `</tbody></table>`;
+}
+
+// Barres génériques (heures, jours de semaine). rows: [{label, value, title}].
+function finBars(rows, opts = {}) {
+  const W = 560, H = 150, P = { t: 10, r: 6, b: 20, l: 6 };
+  const iw = W - P.l - P.r, ih = H - P.t - P.b;
+  const max = Math.max(1, ...rows.map((r) => r.value));
+  const bw = iw / rows.length;
+  const step = Math.max(1, Math.ceil(rows.length / (opts.maxLabels || 8)));
+  let bars = "", labels = "";
+  rows.forEach((r, i) => {
+    const h = (r.value / max) * ih;
+    const x = P.l + i * bw;
+    bars += `<rect x="${(x + bw * 0.18).toFixed(1)}" y="${(P.t + ih - h).toFixed(1)}"` +
+      ` width="${(bw * 0.64).toFixed(1)}" height="${Math.max(h, r.value ? 2 : 0.5).toFixed(1)}"` +
+      ` rx="2" class="fin-bar${r.value ? "" : " zero"}"><title>${escapeHtml(r.title)}</title></rect>`;
+    if (i % step === 0 || i === rows.length - 1) {
+      labels += `<text x="${(x + bw / 2).toFixed(1)}" y="${H - 5}" class="fin-xlab">${escapeHtml(r.label)}</text>`;
+    }
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" class="fin-svg">` +
+    `<line x1="${P.l}" y1="${P.t + ih}" x2="${W - P.r}" y2="${P.t + ih}" class="fin-axis"/>` +
+    bars + labels + `</svg>`;
+}
+
+// Série temporelle : barres = CA, ligne = net (même échelle).
+function finChartDays(rows, cur) {
+  if (!rows.length) return `<p class="muted small">Aucune donnée.</p>`;
+  const W = 560, H = 170, P = { t: 12, r: 8, b: 24, l: 8 };
+  const iw = W - P.l - P.r, ih = H - P.t - P.b;
+  const lo = Math.min(0, ...rows.map((r) => r.net));
+  const hi = Math.max(1, ...rows.map((r) => Math.max(r.revenue, r.net)));
+  const y = (v) => P.t + ih - ((v - lo) / (hi - lo)) * ih;
+  const bw = iw / rows.length;
+  const y0 = y(0);
+  let bars = "";
+  const pts = [];
+  rows.forEach((r, i) => {
+    const x = P.l + i * bw;
+    const by = y(r.revenue);
+    const title = `${r.day} · CA ${finMoney(r.revenue, cur)} · net ${finMoney(r.net, cur)} · ${r.orders} cmd`;
+    bars += `<rect x="${(x + bw * 0.15).toFixed(1)}" y="${Math.min(by, y0).toFixed(1)}"` +
+      ` width="${(bw * 0.7).toFixed(1)}" height="${Math.max(Math.abs(y0 - by), r.revenue ? 2 : 0.5).toFixed(1)}"` +
+      ` rx="2" class="fin-bar${r.revenue ? "" : " zero"}"><title>${escapeHtml(title)}</title></rect>`;
+    pts.push(`${(x + bw / 2).toFixed(1)},${y(r.net).toFixed(1)}`);
+  });
+  const step = Math.max(1, Math.round(rows.length / 6));
+  let labels = "";
+  rows.forEach((r, i) => {
+    if (i % step !== 0 && i !== rows.length - 1) return;
+    labels += `<text x="${(P.l + i * bw + bw / 2).toFixed(1)}" y="${H - 6}" class="fin-xlab">` +
+      `${r.day.slice(8)}/${r.day.slice(5, 7)}</text>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" class="fin-svg">` +
+    `<line x1="${P.l}" y1="${y0.toFixed(1)}" x2="${W - P.r}" y2="${y0.toFixed(1)}" class="fin-axis"/>` +
+    bars + `<polyline points="${pts.join(" ")}" class="fin-netline"/>` + labels + `</svg>`;
+}
+
+function finCountryTable(rows, cur) {
+  if (!rows.length) return `<p class="muted small">Aucune vente sur la période.</p>`;
+  const max = Math.max(1, ...rows.map((r) => r.revenue));
+  return `<table class="fin-table"><thead><tr><th>Pays</th><th></th>` +
+    `<th class="num">Cmd</th><th class="num">CA</th><th class="num">Net</th></tr></thead><tbody>` +
+    rows.map((r) =>
+      `<tr data-country="${r.country}" class="${finState.country === r.country ? "sel" : ""}">` +
+      `<td class="fin-cname">${flagEmoji(r.country)} ${escapeHtml(countryName(r.country))}</td>` +
+      `<td class="bar-cell"><span class="fin-cbar" style="width:${((r.revenue / max) * 100).toFixed(1)}%"></span></td>` +
+      `<td class="num">${r.orders}</td>` +
+      `<td class="num">${finMoney(r.revenue, cur)}</td>` +
+      `<td class="num${r.net < 0 ? " neg" : ""}">${finMoney(r.net, cur)}</td></tr>`
+    ).join("") + `</tbody></table>`;
+}
+
+// ---- commandes & expéditions ------------------------------------------------
+async function finLoadOrders(reset = false) {
+  if (reset) finState.offset = 0;
+  try {
+    const d = await api(`/api/finance/orders?days=${finState.days}${finShopQ()}` +
+      (finState.country ? `&country=${enc(finState.country)}` : "") +
+      `&ship=${finState.ship}&limit=${finState.limit}&offset=${finState.offset}`);
+    finState.total = d.total;
+    const html = d.orders.map(finOrderRow).join("") ||
+      `<p class="muted">Aucune commande${finState.ship === "to_ship" ? " à expédier" : ""} sur la période.</p>`;
+    const box = $("#fin-orders-list");
+    if (reset) box.innerHTML = html;
+    else box.insertAdjacentHTML("beforeend", html);
+    $("#fin-orders-count").textContent =
+      `${d.total} commande${d.total > 1 ? "s" : ""} · ${d.to_ship} à expédier (toutes périodes)`;
+    $("#fin-more").classList.toggle("hidden", finState.offset + finState.limit >= d.total);
+  } catch (e) { toast("Commandes : " + e.message, true); }
+}
+
+function finOrderRow(o) {
+  const cur = o.currency;
+  const date = new Date(o.created_ts * 1000).toLocaleString("fr-FR", {
+    day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
+  });
+  const itemsRaw = (o.items || []).map((it) =>
+    (it.quantity > 1 ? `${it.quantity} × ` : "") + (it.title || `Listing ${it.listing_id}`)
+  ).join(" · ");
+  const shipChip = o.excluded
+    ? `<span class="fin-ship-chip excl">✕ ${escapeHtml(o.status)}</span>`
+    : o.shipped
+      ? `<span class="fin-ship-chip ok">✓ Expédiée</span>`
+      : `<span class="fin-ship-chip todo">📦 À expédier</span>`;
+  const a = o.address || {};
+  const addrCompact = [a.street, a.city_line, countryName(o.buyer_country)]
+    .filter(Boolean).join(", ");
+  return `<div class="fin-order${o.excluded ? " excluded" : ""}" data-rid="${o.receipt_id}">
+    <div class="fin-order-main" data-fin-toggle="${o.receipt_id}">
+      <span class="fin-o-num" title="N° de commande">#${o.seq ?? "–"}</span>
+      <span class="fin-o-date">${date}</span>
+      <span class="fin-o-flag" title="${escapeHtml(countryName(o.buyer_country))}">${flagEmoji(o.buyer_country)}</span>
+      ${(o.items || [])[0]?.listing_id
+        ? `<img class="fin-o-thumb" alt=""
+             src="/api/finance/listing-image/${o.items[0].listing_id}"
+             onerror="this.style.visibility='hidden'" />`
+        : ""}
+      <span class="fin-o-col">
+        <span class="fin-o-items" title="${escapeHtml(itemsRaw)}">${escapeHtml(o.buyer_name || "")}${o.buyer_name ? " — " : ""}${escapeHtml(itemsRaw) || "—"}</span>
+        ${addrCompact ? `<span class="fin-o-addr" title="${escapeHtml((o.address && o.address.formatted) || addrCompact)}">📍 ${escapeHtml(addrCompact)}</span>` : ""}
+        ${o.note ? `<span class="fin-o-note" title="${escapeHtml(o.note)}">💬 ${escapeHtml(o.note)}</span>` : ""}
+      </span>
+      <span class="fin-o-qty" title="${o.item_count} article${o.item_count > 1 ? "s" : ""}">×${o.item_count}</span>
+      <span class="fin-o-rev">${finMoney(o.revenue, cur)}</span>
+      <span class="fin-o-net${o.net < 0 ? " neg" : ""}">${o.excluded ? "" : "net " + finMoney(o.net, cur)}</span>
+      ${shipChip}
+    </div>
+    <div class="fin-order-detail hidden" id="fin-od-${o.receipt_id}">
+      <p class="muted small fin-od-breakdown">
+        CA ${finMoney(o.revenue, cur)} − frais ${finMoney(o.fees, cur)} − produit ${finMoney(o.cogs, cur)}${o.cost_override != null ? " ✎" : o.cogs_missing ? " ⚠" : ""}
+        − port ${finMoney(o.ship_cost, cur)}${o.shipping_cost != null && o.cost_currency && o.cost_currency !== "EUR" ? ` (${o.shipping_cost} ${CUR_SYM[o.cost_currency] || o.cost_currency})` : ""}
+        = <b>net ${finMoney(o.net, cur)}</b>${o.is_shipped_etsy ? " · marquée expédiée côté Etsy" : ""}
+      </p>
+      <div class="fin-od-cost">
+        <label>Prix d'achat</label>
+        <input class="fin-costoverride" type="number" step="0.01" min="0"
+               placeholder="${o.cost_auto ? "auto " + o.cost_auto : "ex : 11,30"}"
+               title="Remplace le coût produit pour le net de CETTE commande — vide = coût produit auto"
+               value="${o.cost_override != null ? o.cost_override : ""}" />
+        <select class="fin-costcur" title="Devise du prix d'achat">${curOptions(o.cost_currency)}</select>
+        <label class="fin-od-date-lbl">acheté le</label>
+        <input class="fin-purchasedate" type="date" title="Date d'achat fournisseur (suivi de trésorerie)"
+               value="${o.purchase_date || ""}" />
+        <span class="muted small">${cptCostHint(o, cur)}</span>
+      </div>
+      ${a.formatted ? `<div class="fin-od-addr">
+        <span class="fin-od-addr-txt">${escapeHtml(a.formatted).replace(/\n/g, "<br>")}</span>
+        <button class="ghost small-btn fin-copy-addr" data-addr="${encodeURIComponent(a.formatted)}" type="button">📋 Copier l'adresse</button>
+      </div>` : ""}
+      <div class="fin-od-ship">
+        <label class="switch">
+          <input type="checkbox" class="fin-shipped" ${o.shipped ? "checked" : ""} />
+          <span class="track"></span><span class="switch-label">Colis envoyé</span>
+        </label>
+        <input class="fin-tracking" type="text" placeholder="N° de suivi" value="${escapeHtml(o.tracking_number || "")}" />
+        <input class="fin-carrier" type="text" placeholder="Transporteur (Colissimo…)" value="${escapeHtml(o.carrier || "")}" />
+        <span class="fin-shipfield">
+          <input class="fin-shipcost" type="number" step="0.01" min="0" placeholder="Port payé"
+                 title="Coût d'envoi réel de CETTE commande, dans la devise choisie — vide = défaut des réglages"
+                 value="${o.shipping_cost != null ? o.shipping_cost : ""}" />
+          <span class="fin-shipcur">${CUR_SYM[o.cost_currency] || "€"}</span>
+        </span>
+        <button class="primary small-btn fin-save-ship" data-rid="${o.receipt_id}" type="button">Enregistrer</button>
+      </div>
+      <div class="fin-od-note">
+        <label>💬 Commentaire</label>
+        <input class="fin-note" type="text" placeholder="Note libre sur cette commande…" value="${escapeHtml(o.note || "")}" />
+      </div>
+      ${o.shipped && o.shipped_at
+        ? `<p class="muted small">Expédiée le ${new Date(o.shipped_at * 1000).toLocaleDateString("fr-FR")}${o.tracking_number ? " · " + escapeHtml(o.tracking_number) : ""} <i>(suivi local, rien n'est envoyé à Etsy)</i></p>`
+        : ""}
+    </div>
+  </div>`;
+}
+
+async function finSaveShip(rid) {
+  const od = $(`#fin-od-${rid}`);
+  if (!od) return;
+  const sc = od.querySelector(".fin-shipcost").value;
+  const co = od.querySelector(".fin-costoverride").value;
+  const body = {
+    shipped: od.querySelector(".fin-shipped").checked,
+    tracking_number: od.querySelector(".fin-tracking").value.trim(),
+    carrier: od.querySelector(".fin-carrier").value.trim(),
+    shipping_cost: sc === "" ? null : Number(sc),
+    cost_override: co === "" ? null : Number(co),
+    cost_currency: od.querySelector(".fin-costcur").value,
+    purchase_date: od.querySelector(".fin-purchasedate").value || null,
+    note: od.querySelector(".fin-note").value.trim() || null,
+  };
+  try {
+    await api(`/api/finance/orders/${rid}/shipping`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    toast("Expédition enregistrée (suivi local).");
+    await Promise.all([finLoadOrders(true), finLoadSummary()]);
+  } catch (e) { toast("Échec : " + e.message, true); }
+}
+
+// ---- coûts & frais -----------------------------------------------------------
+async function finLoadCosts() {
+  try {
+    const [settings, prods, ads] = await Promise.all([
+      api("/api/finance/settings"),
+      api("/api/finance/products"),
+      api("/api/finance/ads?days=90"),
+    ]);
+    $("#fs-tx").value = settings.transaction_fee_pct;
+    $("#fs-pay").value = settings.payment_fee_pct;
+    $("#fs-fixed").value = settings.payment_fee_fixed;
+    $("#fs-listing").value = settings.listing_fee;
+    $("#fs-vat").value = settings.fee_vat_pct;
+    $("#fs-ship").value = settings.default_shipping_cost;
+    $("#fx-usd").value = settings.fx_usd;
+    $("#fx-gbp").value = settings.fx_gbp;
+    $("#fx-chf").value = settings.fx_chf;
+    $("#fx-cny").value = settings.fx_cny;
+    finRenderProducts(prods);
+    finRenderAds(ads);
+  } catch (e) { toast("Coûts : " + e.message, true); }
+}
+
+async function finSaveSettings() {
+  const body = {
+    transaction_fee_pct: Number($("#fs-tx").value),
+    payment_fee_pct: Number($("#fs-pay").value),
+    payment_fee_fixed: Number($("#fs-fixed").value),
+    listing_fee: Number($("#fs-listing").value),
+    fee_vat_pct: Number($("#fs-vat").value),
+    default_shipping_cost: Number($("#fs-ship").value),
+    fx_usd: Number($("#fx-usd").value),
+    fx_gbp: Number($("#fx-gbp").value),
+    fx_chf: Number($("#fx-chf").value),
+    fx_cny: Number($("#fx-cny").value),
+  };
+  try {
+    await api("/api/finance/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    toast("Frais enregistrés — net recalculé.");
+    await Promise.all([finLoadSummary(), finLoadTrends()]);
+  } catch (e) { toast("Échec : " + e.message, true); }
+}
+
+function finRenderProducts(prods) {
+  const box = $("#fin-products");
+  if (!prods.length) {
+    box.innerHTML = `<p class="muted">Aucun produit vendu pour l'instant — synchronise d'abord tes commandes.</p>`;
+    return;
+  }
+  box.innerHTML = `<table class="fin-table"><thead><tr><th>Produit</th>` +
+    `<th class="num">Vendus</th><th class="num">Coût unitaire</th><th></th></tr></thead><tbody>` +
+    prods.map((p) =>
+      `<tr data-lid="${p.listing_id}">` +
+      `<td class="fin-ptitle" title="${escapeHtml(p.title)}">` +
+      `<img class="fin-p-thumb" alt="" src="/api/finance/listing-image/${p.listing_id}"` +
+      ` onerror="this.style.visibility='hidden'" />` +
+      `${escapeHtml(p.title || `Listing ${p.listing_id}`)}</td>` +
+      `<td class="num">${p.sold_qty}</td>` +
+      `<td class="num"><input class="fin-cost-input" type="number" step="0.01" min="0"` +
+      ` value="${p.unit_cost != null ? p.unit_cost : ""}" placeholder="—" /></td>` +
+      `<td class="fin-cost-cell"><button class="ghost small-btn fin-cost-save" data-lid="${p.listing_id}" type="button">OK</button>` +
+      `${p.has_cost ? "" : ` <span class="fin-misscost" title="Sans coût saisi, le net est surestimé">⚠</span>`}</td></tr>`
+    ).join("") + `</tbody></table>`;
+}
+
+async function finSaveCost(lid, tr) {
+  const input = tr.querySelector(".fin-cost-input");
+  if (input.value === "") { toast("Entre un coût unitaire.", true); return; }
+  try {
+    await api(`/api/finance/products/${lid}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ unit_cost: Number(input.value), title: tr.querySelector(".fin-ptitle").title }),
+    });
+    toast("Coût enregistré — net recalculé.");
+    await Promise.all([finLoadCosts(), finLoadSummary()]);
+  } catch (e) { toast("Échec : " + e.message, true); }
+}
+
+// Ajout manuel d'un coût produit (avant la 1re vente — ID visible dans l'URL
+// de l'annonce). Les produits vendus arrivent automatiquement via la synchro.
+async function finAddProduct() {
+  const lid = $("#fp-lid").value.trim();
+  const cost = $("#fp-cost").value;
+  if (!lid || cost === "") { toast("ID du listing et coût unitaire requis.", true); return; }
+  try {
+    await api(`/api/finance/products/${enc(lid)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ unit_cost: Number(cost), title: $("#fp-title").value.trim() }),
+    });
+    $("#fp-lid").value = "";
+    $("#fp-title").value = "";
+    $("#fp-cost").value = "";
+    toast("Coût enregistré — net recalculé.");
+    await Promise.all([finLoadCosts(), finLoadSummary()]);
+  } catch (e) { toast("Échec : " + e.message, true); }
+}
+
+function finRenderAds(ads) {
+  const box = $("#fin-ads-list");
+  if (!ads.entries.length) {
+    box.innerHTML = `<p class="muted small">Aucune dépense saisie (90 derniers jours).</p>`;
+    return;
+  }
+  box.innerHTML = ads.entries.map((e) =>
+    `<div class="fin-ad-row"><span>${new Date(e.day + "T00:00:00").toLocaleDateString("fr-FR")}</span>` +
+    `<span class="num">${finMoney(e.amount, "EUR")}</span>` +
+    `<button class="icon-btn fin-ad-del" data-day="${e.day}" title="Supprimer" type="button">✕</button></div>`
+  ).join("") +
+    `<div class="fin-ad-row total"><span>Total 90 j</span><span class="num">${finMoney(ads.total, "EUR")}</span><span></span></div>`;
+}
+
+async function finAddAd() {
+  const day = $("#ad-day").value;
+  const amount = $("#ad-amount").value;
+  if (!day || amount === "") { toast("Date et montant requis.", true); return; }
+  try {
+    await api("/api/finance/ads", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ day, amount: Number(amount) }),
+    });
+    $("#ad-amount").value = "";
+    toast("Dépense pub enregistrée.");
+    await Promise.all([finLoadCosts(), finLoadSummary(), finLoadTrends()]);
+  } catch (e) { toast("Échec : " + e.message, true); }
+}
+
+async function finDelAd(day) {
+  try {
+    await api(`/api/finance/ads/${enc(day)}`, { method: "DELETE" });
+    await Promise.all([finLoadCosts(), finLoadSummary()]);
+  } catch (e) { toast("Échec : " + e.message, true); }
+}
+
+function finInit() {
+  $("#fin-sync").addEventListener("click", finSync);
+  $("#fin-days").addEventListener("change", () => {
+    finState.days = Number($("#fin-days").value);
+    finRefresh(false);
+  });
+  $("#fin-country").addEventListener("change", () => {
+    finState.country = $("#fin-country").value;
+    finRefresh(false);
+  });
+  $$(".fin-tab").forEach((b) =>
+    b.addEventListener("click", () => finShowTab(b.dataset.fintab)));
+  $$(".fin-chip").forEach((b) =>
+    b.addEventListener("click", () => {
+      finState.ship = b.dataset.finship;
+      $$(".fin-chip").forEach((c) => c.classList.toggle("active", c === b));
+      finLoadOrders(true);
+    }));
+  $("#fin-more").addEventListener("click", () => {
+    finState.offset += finState.limit;
+    finLoadOrders(false);
+  });
+  $("#fs-save").addEventListener("click", finSaveSettings);
+  $("#ad-add").addEventListener("click", finAddAd);
+  $("#fp-add").addEventListener("click", finAddProduct);
+  $("#fp-cost").addEventListener("keydown", (e) => { if (e.key === "Enter") finAddProduct(); });
+
+  // Délégation : déplier une commande / enregistrer son expédition.
+  $("#fin-orders-list").addEventListener("click", (e) => {
+    const save = e.target.closest(".fin-save-ship");
+    if (save) { finSaveShip(save.dataset.rid); return; }
+    const copy = e.target.closest(".fin-copy-addr");
+    if (copy) {
+      const addr = decodeURIComponent(copy.dataset.addr || "");
+      navigator.clipboard.writeText(addr).then(
+        () => toast("Adresse copiée."),
+        () => toast("Copie impossible (clipboard).", true),
+      );
+      return;
+    }
+    if (e.target.closest("input, button, label, .switch, select")) return;
+    const main = e.target.closest(".fin-order-main");
+    if (main) $(`#fin-od-${main.dataset.finToggle}`)?.classList.toggle("hidden");
+  });
+
+  // La devise du prix d'achat pilote aussi celle du port : MAJ du symbole en direct.
+  $("#fin-orders-list").addEventListener("change", (e) => {
+    const sel = e.target.closest(".fin-costcur");
+    if (!sel) return;
+    const od = sel.closest(".fin-order-detail");
+    const suffix = od?.querySelector(".fin-shipcur");
+    if (suffix) suffix.textContent = CUR_SYM[sel.value] || "€";
+  });
+
+  // Délégation : coûts produits (bouton OK ou touche Entrée).
+  $("#fin-products").addEventListener("click", (e) => {
+    const btn = e.target.closest(".fin-cost-save");
+    if (btn) finSaveCost(btn.dataset.lid, btn.closest("tr"));
+  });
+  $("#fin-products").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.classList.contains("fin-cost-input")) {
+      const tr = e.target.closest("tr");
+      finSaveCost(tr.dataset.lid, tr);
+    }
+  });
+
+  $("#fin-ads-list").addEventListener("click", (e) => {
+    const del = e.target.closest(".fin-ad-del");
+    if (del) finDelAd(del.dataset.day);
+  });
+
+  // Clic sur un pays = filtre (re-clic = enlève le filtre).
+  $("#fin-countries").addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-country]");
+    if (!tr) return;
+    finState.country = finState.country === tr.dataset.country ? "" : tr.dataset.country;
+    $("#fin-country").value = finState.country;
+    finRefresh(false);
+  });
+
+  // KPI « coût produits » avec coûts manquants → ouvre l'onglet Coûts.
+  $("#fin-kpis").addEventListener("click", (e) => {
+    if (e.target.closest(".fin-kpi.warn")) finShowTab("costs");
+  });
+
+  const adDay = $("#ad-day");
+  if (adDay) adDay.valueAsDate = new Date();
+}
+
+// ===========================================================================
+//  Comptabilité PCG — journaux ventes/achats, grand livre, export FEC.
+//  Lecture seule : génère les écritures depuis les données Ventes, rien n'est
+//  écrit sur Etsy. Outil de préparation à valider par un expert-comptable.
+// ===========================================================================
+const cptState = { days: 365, tab: "ventes", data: null, config: null };
+
+function cptShopQ() {
+  return state.activeShop ? `&shop=${enc(state.activeShop)}` : "";
+}
+
+function cptMoney(v) {
+  const n = Number(v);
+  if (!isFinite(n) || n === 0) return "";
+  return n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+async function cptOpen() {
+  cptShowTab(cptState.tab);
+  await Promise.all([cptLoadJournal(), cptLoadConfig()]);
+}
+
+function cptShowTab(tab) {
+  cptState.tab = tab;
+  $$(".cpt-tab").forEach((b) => b.classList.toggle("active", b.dataset.cpttab === tab));
+  const isJournal = tab === "ventes" || tab === "achats";
+  $("#cpt-journal").classList.toggle("hidden", !isJournal);
+  $("#cpt-grandlivre").classList.toggle("hidden", tab !== "grandlivre");
+  $("#cpt-reglages").classList.toggle("hidden", tab !== "reglages");
+  if (isJournal) cptRenderJournal();
+  if (tab === "grandlivre") cptRenderLedger();
+}
+
+async function cptLoadJournal() {
+  try {
+    cptState.data = await api(`/api/accounting/journal?days=${cptState.days}${cptShopQ()}`);
+    cptRenderBalance();
+    if (cptState.tab === "ventes" || cptState.tab === "achats") cptRenderJournal();
+    if (cptState.tab === "grandlivre") cptRenderLedger();
+  } catch (e) { toast("Comptabilité : " + e.message, true); }
+}
+
+function cptRenderBalance() {
+  const d = cptState.data;
+  if (!d) { $("#cpt-balance").textContent = ""; return; }
+  const t = d.summary.total;
+  const vatTxt = d.vat_enabled ? `TVA ${d.vat_rate} %` : "Franchise en base (sans TVA)";
+  const eq = t.balanced
+    ? `<span class="cpt-ok">✓ équilibré</span>`
+    : `<span class="cpt-bad">⚠ déséquilibre</span>`;
+  $("#cpt-balance").innerHTML =
+    `${vatTxt} · ${d.summary.ventes.entries} ventes · ${d.summary.achats.entries} achats · ` +
+    `total débit ${cptMoney(t.debit)} € = crédit ${cptMoney(t.credit)} € ${eq}`;
+}
+
+function cptRenderJournal() {
+  const d = cptState.data;
+  const box = $("#cpt-journal-body");
+  if (!d) { box.innerHTML = `<p class="muted">Chargement…</p>`; return; }
+  const entries = cptState.tab === "ventes" ? d.ventes : d.achats;
+  const sum = cptState.tab === "ventes" ? d.summary.ventes : d.summary.achats;
+  if (!entries.length) {
+    box.innerHTML = `<p class="muted">Aucune écriture sur la période — synchronise tes ventes d'abord.</p>`;
+    return;
+  }
+  const rows = entries.map((e) => {
+    const ref = e.order_no ? `commande #${e.order_no}` : `pièce ${escapeHtml(e.piece)}`;
+    const head = `<tr class="cpt-entry-head"><td colspan="5">` +
+      `<b>${e.journal}${String(e.num).padStart(5, "0")}</b> · ${e.date} · ${ref} — ${escapeHtml(e.label)}</td></tr>`;
+    const lines = e.lines.map((l) =>
+      `<tr><td class="cpt-acc">${escapeHtml(l.account)}</td>` +
+      `<td>${escapeHtml(l.account_lib)}</td>` +
+      `<td class="num">${cptMoney(l.debit)}</td>` +
+      `<td class="num">${cptMoney(l.credit)}</td></tr>`
+    ).join("");
+    return head + lines;
+  }).join("");
+  box.innerHTML = `<table class="cpt-table"><thead><tr>` +
+    `<th>Compte</th><th>Libellé</th><th class="num">Débit</th><th class="num">Crédit</th></tr></thead>` +
+    `<tbody>${rows}</tbody>` +
+    `<tfoot><tr><td colspan="2">Total ${cptState.tab === "ventes" ? "ventes" : "achats"} (${sum.entries} écritures)</td>` +
+    `<td class="num">${cptMoney(sum.debit)}</td><td class="num">${cptMoney(sum.credit)}</td></tr></tfoot></table>`;
+}
+
+function cptRenderLedger() {
+  const d = cptState.data;
+  const box = $("#cpt-grandlivre-body");
+  if (!d) { box.innerHTML = `<p class="muted">Chargement…</p>`; return; }
+  if (!d.totals.length) { box.innerHTML = `<p class="muted">Aucun mouvement.</p>`; return; }
+  const rows = d.totals.map((t) =>
+    `<tr><td class="cpt-acc">${escapeHtml(t.account)}</td>` +
+    `<td>${escapeHtml(t.label)}</td>` +
+    `<td class="num">${cptMoney(t.debit)}</td>` +
+    `<td class="num">${cptMoney(t.credit)}</td>` +
+    `<td class="num ${t.balance < 0 ? "neg" : ""}">${cptMoney(t.balance) || "0,00"}</td></tr>`
+  ).join("");
+  const t = d.summary.total;
+  box.innerHTML = `<table class="cpt-table"><thead><tr>` +
+    `<th>Compte</th><th>Libellé</th><th class="num">Débit</th><th class="num">Crédit</th><th class="num">Solde</th></tr></thead>` +
+    `<tbody>${rows}</tbody>` +
+    `<tfoot><tr><td colspan="2">Total général</td>` +
+    `<td class="num">${cptMoney(t.debit)}</td><td class="num">${cptMoney(t.credit)}</td>` +
+    `<td class="num">${t.balanced ? "0,00" : "⚠"}</td></tr></tfoot></table>`;
+}
+
+async function cptLoadConfig() {
+  try {
+    cptState.config = await api("/api/accounting/config");
+    $("#cpt-vat-enabled").checked = cptState.config.vat_enabled;
+    $("#cpt-vat-rate").value = cptState.config.vat_rate;
+    cptRenderAccounts();
+  } catch (e) { toast("Config compta : " + e.message, true); }
+}
+
+function cptRenderAccounts() {
+  const acc = cptState.config?.accounts || {};
+  $("#cpt-accounts").innerHTML = Object.entries(acc).map(([key, a]) =>
+    `<div class="cpt-acc-row">` +
+    `<input class="cpt-acc-code" data-key="${key}" type="text" value="${escapeHtml(a.code)}" />` +
+    `<span class="cpt-acc-lib">${escapeHtml(a.label)}</span></div>`
+  ).join("");
+}
+
+async function cptSaveVat() {
+  try {
+    await api("/api/accounting/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        vat_enabled: $("#cpt-vat-enabled").checked,
+        vat_rate: Number($("#cpt-vat-rate").value),
+      }),
+    });
+    toast("TVA enregistrée — écritures recalculées.");
+    await cptLoadJournal();
+  } catch (e) { toast("Échec : " + e.message, true); }
+}
+
+async function cptSaveAccounts() {
+  const accounts = {};
+  $$(".cpt-acc-code").forEach((i) => { accounts[i.dataset.key] = i.value.trim(); });
+  try {
+    await api("/api/accounting/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accounts }),
+    });
+    toast("Plan de comptes enregistré.");
+    await Promise.all([cptLoadConfig(), cptLoadJournal()]);
+  } catch (e) { toast("Échec : " + e.message, true); }
+}
+
+function cptExport(fmt) {
+  // Téléchargement direct (l'endpoint renvoie un fichier en pièce jointe).
+  const url = `/api/accounting/export.${fmt}?days=${cptState.days}${cptShopQ()}`;
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  toast(`Export ${fmt.toUpperCase()} lancé.`);
+}
+
+function cptInit() {
+  $$(".cpt-tab").forEach((b) =>
+    b.addEventListener("click", () => cptShowTab(b.dataset.cpttab)));
+  $("#cpt-days").addEventListener("change", () => {
+    cptState.days = Number($("#cpt-days").value);
+    cptLoadJournal();
+  });
+  $("#cpt-export-fec").addEventListener("click", () => cptExport("fec"));
+  $("#cpt-export-csv").addEventListener("click", () => cptExport("csv"));
+  $("#cpt-vat-save").addEventListener("click", cptSaveVat);
+  $("#cpt-acc-save").addEventListener("click", cptSaveAccounts);
+}
+
 function wireDropzone() {
   const dz = $("#dropzone");
   const fi = $("#file-input");
@@ -2548,6 +3474,12 @@ async function init() {
 
   // sidebar
   $("#refresh-folders").addEventListener("click", loadFolders);
+
+  // ventes & résultat net
+  finInit();
+
+  // comptabilité PCG
+  cptInit();
 
   // atelier
   wireDropzone();

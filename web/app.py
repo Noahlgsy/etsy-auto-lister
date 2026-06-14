@@ -61,7 +61,7 @@ from src.vision import IMAGE_MEDIA_TYPES, analyze_product_folder
 from src import shops
 from src.shops import use_shop
 
-from . import competitors, easypic, jobs, niche, niche_tracker
+from . import accounting, competitors, easypic, finance, jobs, niche, niche_tracker
 
 ROOT = Path(__file__).resolve().parent.parent          # etsy-auto-lister/
 FLOW_DIR = ROOT.parent / "flow-automation"             # Google Flow automation
@@ -80,6 +80,22 @@ ALLOWED_IMG_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 DEFAULT_OCCASION = "Birthday"
 
 app = FastAPI(title="Etsy Auto-Lister")
+
+
+@app.exception_handler(finance.FinanceError)
+async def _finance_error_handler(
+    _request: Request, exc: finance.FinanceError
+) -> JSONResponse:
+    """Erreurs métier de l'onglet Ventes (sync Etsy, validations) → JSON propre."""
+    return JSONResponse(status_code=exc.status, content={"detail": exc.detail})
+
+
+@app.exception_handler(accounting.AccountingError)
+async def _accounting_error_handler(
+    _request: Request, exc: accounting.AccountingError
+) -> JSONResponse:
+    """Erreurs métier de l'onglet Comptabilité → JSON propre."""
+    return JSONResponse(status_code=exc.status, content={"detail": exc.detail})
 
 
 @app.exception_handler(shops.ShopError)
@@ -1466,6 +1482,206 @@ def easypic_generate(item_id: str, req: EasyPicGenerateReq) -> dict:
         shop=req.shop,
     )
     return {"job_id": job_id, "mode": "preview", "folder": slug}
+
+
+# --------------------------------------------------------------------------- #
+# Ventes & résultat net : commandes Etsy synchronisées, coûts, tendances.
+# Lecture seule côté Etsy (getShopReceipts) ; le suivi d'expédition (statut,
+# n° de suivi, transporteur) est purement LOCAL — rien n'est écrit sur Etsy.
+# --------------------------------------------------------------------------- #
+class FinShipReq(BaseModel):
+    """Mise à jour du suivi d'expédition local d'une commande.
+
+    Seuls les champs envoyés sont modifiés ; `shipping_cost: null` retombe sur
+    le port par défaut des réglages.
+    """
+    shipped: bool | None = None
+    tracking_number: str | None = None
+    carrier: str | None = None
+    ship_note: str | None = None
+    shipping_cost: float | None = None
+    # Prix d'achat saisi pour cette commande ; null = retombe sur le coût produit.
+    cost_override: float | None = None
+    cost_currency: str | None = None   # EUR / USD / GBP / CHF / CNY
+    purchase_date: str | None = None   # date d'achat fournisseur (AAAA-MM-JJ)
+    note: str | None = None            # commentaire libre sur la commande
+
+
+class FinSettingsReq(BaseModel):
+    transaction_fee_pct: float | None = None
+    payment_fee_pct: float | None = None
+    payment_fee_fixed: float | None = None
+    listing_fee: float | None = None
+    fee_vat_pct: float | None = None
+    default_shipping_cost: float | None = None
+    # Taux de change vers l'euro (1 unité = X €).
+    fx_usd: float | None = None
+    fx_gbp: float | None = None
+    fx_chf: float | None = None
+    fx_cny: float | None = None
+
+
+class FinProductCostReq(BaseModel):
+    unit_cost: float
+    title: str | None = None
+
+
+class FinAdReq(BaseModel):
+    day: str  # AAAA-MM-JJ
+    amount: float
+    note: str | None = None
+
+
+@app.post("/api/finance/sync")
+def finance_sync(shop: str | None = None) -> dict:
+    """Synchronise les commandes Etsy (une boutique, ou toutes si shop absent)."""
+    return finance.sync(shop)
+
+
+@app.get("/api/finance/status")
+def finance_status() -> dict:
+    return finance.status()
+
+
+@app.get("/api/finance/summary")
+def finance_summary(days: int = 30, shop: str | None = None, country: str | None = None) -> dict:
+    return finance.summary(days=days, shop=shop, country=country)
+
+
+@app.get("/api/finance/trends")
+def finance_trends(days: int = 30, shop: str | None = None, country: str | None = None) -> dict:
+    return finance.trends(days=days, shop=shop, country=country)
+
+
+@app.get("/api/finance/cashflow")
+def finance_cashflow(days: int = 90, shop: str | None = None) -> dict:
+    """Échéancier de trésorerie : entrées/sorties par jour + solde cumulé."""
+    return finance.cashflow(days=days, shop=shop)
+
+
+@app.get("/api/finance/orders")
+def finance_orders(
+    days: int = 30,
+    shop: str | None = None,
+    country: str | None = None,
+    ship: str = "all",
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    if ship not in ("all", "to_ship", "shipped"):
+        raise HTTPException(status_code=400, detail="ship doit être all, to_ship ou shipped.")
+    return finance.list_orders(
+        days=days, shop=shop, country=country, ship=ship, limit=limit, offset=offset
+    )
+
+
+@app.post("/api/finance/orders/{receipt_id}/shipping")
+def finance_set_shipping(receipt_id: int, req: FinShipReq) -> dict:
+    """Marque une commande expédiée / saisit n° de suivi (LOCAL uniquement)."""
+    fields = req.model_dump(exclude_unset=True)
+    return finance.set_shipping(receipt_id, fields)
+
+
+@app.get("/api/finance/products")
+def finance_products() -> list[dict]:
+    """Produits vendus + coût de revient saisi (pour le calcul du net)."""
+    return finance.products()
+
+
+@app.get("/api/finance/listing-image/{listing_id}")
+def finance_listing_image(listing_id: int):
+    """Vignette d'un listing, servie depuis le cache disque (résolue 1 fois)."""
+    path = finance.listing_image_path(listing_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Image introuvable.")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@app.put("/api/finance/products/{listing_id}")
+def finance_set_product_cost(listing_id: int, req: FinProductCostReq) -> dict:
+    return finance.set_product_cost(listing_id, req.unit_cost, req.title)
+
+
+@app.get("/api/finance/settings")
+def finance_get_settings() -> dict:
+    return finance.get_settings()
+
+
+@app.put("/api/finance/settings")
+def finance_put_settings(req: FinSettingsReq) -> dict:
+    return finance.save_settings(req.model_dump(exclude_unset=True))
+
+
+@app.get("/api/finance/ads")
+def finance_ads(days: int = 90) -> dict:
+    return finance.ads_list(days=days)
+
+
+@app.put("/api/finance/ads")
+def finance_ads_set(req: FinAdReq) -> dict:
+    return finance.ads_set(req.day, req.amount, req.note)
+
+
+@app.delete("/api/finance/ads/{day}")
+def finance_ads_delete(day: str) -> dict:
+    if not finance.ads_delete(day):
+        raise HTTPException(status_code=404, detail="Aucune dépense pub à cette date.")
+    return {"deleted": day}
+
+
+# --------------------------------------------------------------------------- #
+# Comptabilité PCG : écritures (journal ventes + achats), grand livre, export.
+# Génère les écritures en partie double depuis les données Ventes ; lecture
+# seule, aucune écriture Etsy. Outil de préparation — à valider par un
+# expert-comptable (TVA transfrontalière notamment).
+# --------------------------------------------------------------------------- #
+class AcctConfigReq(BaseModel):
+    vat_enabled: bool | None = None
+    vat_rate: float | None = None
+    # {clé_compte: "code"} — ex. {"ventes": "707", "commission": "6221"}
+    accounts: dict[str, str] | None = None
+
+
+@app.get("/api/accounting/config")
+def accounting_config() -> dict:
+    return accounting.get_config()
+
+
+@app.put("/api/accounting/config")
+def accounting_put_config(req: AcctConfigReq) -> dict:
+    return accounting.save_config(req.model_dump(exclude_unset=True))
+
+
+@app.get("/api/accounting/journal")
+def accounting_journal(days: int = 365, shop: str | None = None) -> dict:
+    """Journaux des ventes + achats + grand livre sur la période."""
+    return accounting.generate(days=days, shop=shop)
+
+
+@app.get("/api/accounting/export.fec")
+def accounting_export_fec(days: int = 365, shop: str | None = None):
+    """Export FEC (Fichier des Écritures Comptables, format légal français)."""
+    data = accounting.generate(days=days, shop=shop)
+    text = accounting.to_fec(data)
+    stamp = time.strftime("%Y%m%d")
+    return Response(
+        content=text,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="FEC_{stamp}.txt"'},
+    )
+
+
+@app.get("/api/accounting/export.csv")
+def accounting_export_csv(days: int = 365, shop: str | None = None):
+    """Export CSV lisible (Excel) des écritures."""
+    data = accounting.generate(days=days, shop=shop)
+    text = accounting.to_csv(data)
+    stamp = time.strftime("%Y%m%d")
+    return Response(
+        content=text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="ecritures_{stamp}.csv"'},
+    )
 
 
 # Serve the single-page frontend for everything else.

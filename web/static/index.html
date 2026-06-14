@@ -18,6 +18,8 @@
 
     <nav class="nav">
       <button class="nav-btn active" data-view="atelier">Atelier</button>
+      <button class="nav-btn" data-view="ventes">Ventes</button>
+      <button class="nav-btn" data-view="compta">Comptabilité</button>
       <button class="nav-btn" data-view="easypic">Easy picture</button>
       <button class="nav-btn" data-view="tags">Tag Searcher</button>
       <button class="nav-btn" data-view="concurrents">Concurrents</button>
@@ -203,6 +205,250 @@
         </div>
 
         <div id="result" class="result hidden"></div>
+      </div>
+
+      <!-- =============== VUE VENTES & RÉSULTAT NET =============== -->
+      <div id="view-ventes" class="view hidden">
+        <div class="view-head">
+          <h2>Ventes &amp; résultat net</h2>
+          <p class="muted">Commandes Etsy synchronisées, coûts réels, tendances par heure / jour / pays.
+            Le suivi d'expédition est <b>local</b> — rien n'est écrit sur Etsy.</p>
+        </div>
+
+        <div class="card fin-toolbar">
+          <div class="fin-tabs">
+            <button class="fin-tab active" data-fintab="dash" type="button">Tableau de bord</button>
+            <button class="fin-tab" data-fintab="orders" type="button">Commandes <span id="fin-toship" class="mini-badge hidden"></span></button>
+            <button class="fin-tab" data-fintab="treso" type="button">Trésorerie</button>
+            <button class="fin-tab" data-fintab="costs" type="button">Coûts &amp; frais</button>
+          </div>
+          <div class="fin-filters">
+            <select id="fin-days" title="Période analysée">
+              <option value="7">7 jours</option>
+              <option value="30" selected>30 jours</option>
+              <option value="90">90 jours</option>
+              <option value="180">6 mois</option>
+              <option value="365">1 an</option>
+            </select>
+            <select id="fin-country" title="Filtrer par pays d'achat">
+              <option value="">🌍 Tous pays</option>
+            </select>
+            <button id="fin-sync" class="primary small-btn" title="Récupérer les dernières commandes depuis Etsy">⟳ Synchroniser</button>
+          </div>
+        </div>
+        <p id="fin-substatus" class="muted small fin-substatus"></p>
+
+        <!-- Sous-vue : tableau de bord -->
+        <div id="fin-dash">
+          <div id="fin-kpis" class="fin-kpis"></div>
+          <div class="grid-2 fin-grid">
+            <div class="card">
+              <h3>Par jour <span class="muted small">CA (barres) · net (ligne)</span></h3>
+              <div id="fin-chart-days" class="fin-chart"></div>
+            </div>
+            <div class="card">
+              <h3>Par heure de la journée <span class="muted small">commandes · heure de Paris</span></h3>
+              <div id="fin-chart-hours" class="fin-chart"></div>
+            </div>
+          </div>
+          <div class="grid-2 fin-grid">
+            <div class="card">
+              <h3>Par jour de semaine <span class="muted small">commandes</span></h3>
+              <div id="fin-chart-weekdays" class="fin-chart"></div>
+            </div>
+            <div class="card">
+              <h3>Par pays <span class="muted small">clique pour filtrer</span></h3>
+              <div id="fin-countries"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sous-vue : commandes & expéditions -->
+        <div id="fin-orders" class="hidden">
+          <div class="card">
+            <div class="fin-orders-head">
+              <div class="fin-chips">
+                <button class="fin-chip active" data-finship="all" type="button">Toutes</button>
+                <button class="fin-chip" data-finship="to_ship" type="button">📦 À expédier</button>
+                <button class="fin-chip" data-finship="shipped" type="button">✓ Expédiées</button>
+              </div>
+              <span id="fin-orders-count" class="muted small"></span>
+            </div>
+            <div id="fin-orders-list" class="fin-orders-list"></div>
+            <div class="row-end">
+              <button id="fin-more" class="ghost small-btn hidden" type="button">Charger plus</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sous-vue : trésorerie (échéancier entrées / sorties) -->
+        <div id="fin-treso" class="hidden">
+          <div id="fin-treso-kpis" class="fin-kpis"></div>
+          <div class="card">
+            <h3>Solde de trésorerie <span class="muted small">cumulé sur la période (départ à 0)</span></h3>
+            <div id="fin-treso-balance" class="fin-chart"></div>
+          </div>
+          <div class="card">
+            <h3>Entrées &amp; sorties par jour <span class="muted small">entrées = ventes encaissées (CA − frais) · sorties = achats + port + pub</span></h3>
+            <div id="fin-treso-flows" class="fin-chart"></div>
+          </div>
+          <div class="card">
+            <div class="fin-orders-head">
+              <h3 style="margin:0">Mouvements</h3>
+              <span class="muted small">entrées datées à la vente · sorties à la date d'achat</span>
+            </div>
+            <div id="fin-treso-table"></div>
+          </div>
+        </div>
+
+        <!-- Sous-vue : coûts & frais -->
+        <div id="fin-costs" class="hidden">
+          <div class="grid-2 fin-grid">
+            <div class="card">
+              <h3>Frais Etsy estimés</h3>
+              <p class="muted small">Appliqués à chaque vente pour calculer le net. Ce sont des estimations — la facture Etsy fait foi.</p>
+              <div class="two">
+                <div class="field">
+                  <label for="fs-tx">Commission transaction (%)</label>
+                  <input id="fs-tx" type="number" step="0.1" min="0" />
+                </div>
+                <div class="field">
+                  <label for="fs-pay">Frais de paiement (%)</label>
+                  <input id="fs-pay" type="number" step="0.1" min="0" />
+                </div>
+              </div>
+              <div class="two">
+                <div class="field">
+                  <label for="fs-fixed">Paiement : fixe / commande</label>
+                  <input id="fs-fixed" type="number" step="0.01" min="0" />
+                </div>
+                <div class="field">
+                  <label for="fs-listing">Mise en ligne / article</label>
+                  <input id="fs-listing" type="number" step="0.01" min="0" />
+                </div>
+              </div>
+              <div class="two">
+                <div class="field">
+                  <label for="fs-vat">TVA sur les frais (%)</label>
+                  <input id="fs-vat" type="number" step="0.1" min="0" />
+                </div>
+                <div class="field">
+                  <label for="fs-ship">Port payé par défaut</label>
+                  <input id="fs-ship" type="number" step="0.01" min="0" />
+                </div>
+              </div>
+              <p class="muted small" style="margin:8px 0 2px">Taux de change vers € <span class="muted">(pour les achats payés en devise)</span></p>
+              <div class="two">
+                <div class="field"><label for="fx-usd">1 $ USD =&nbsp;€</label><input id="fx-usd" type="number" step="0.001" min="0" /></div>
+                <div class="field"><label for="fx-gbp">1 £ GBP =&nbsp;€</label><input id="fx-gbp" type="number" step="0.001" min="0" /></div>
+              </div>
+              <div class="two">
+                <div class="field"><label for="fx-chf">1 CHF =&nbsp;€</label><input id="fx-chf" type="number" step="0.001" min="0" /></div>
+                <div class="field"><label for="fx-cny">1 ¥ CNY =&nbsp;€</label><input id="fx-cny" type="number" step="0.001" min="0" /></div>
+              </div>
+              <div class="row-end">
+                <button id="fs-save" class="primary small-btn" type="button">Enregistrer</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <h3>Dépenses pub (Etsy Ads)</h3>
+              <p class="muted small">Saisies par jour, déduites du net de la période. Globales (toutes boutiques).</p>
+              <div class="fin-ad-form">
+                <input id="ad-day" type="date" />
+                <input id="ad-amount" type="number" step="0.01" min="0" placeholder="Montant" />
+                <button id="ad-add" class="ghost small-btn" type="button">Ajouter</button>
+              </div>
+              <div id="fin-ads-list" class="fin-ads-list"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Coût de revient par produit</h3>
+            <p class="muted small">Ton prix d'achat / fabrication par article (AliExpress, matière…). Sans lui, le net est surestimé.
+              Les produits vendus apparaissent automatiquement après synchro ; tu peux aussi en ajouter un à la main ici.</p>
+            <div class="fin-prod-form">
+              <input id="fp-lid" type="number" min="1" placeholder="ID du listing Etsy" title="Le numéro dans l'URL de l'annonce : etsy.com/listing/123456789/…" />
+              <input id="fp-title" type="text" placeholder="Nom du produit (optionnel)" />
+              <input id="fp-cost" type="number" step="0.01" min="0" placeholder="Coût unitaire" />
+              <button id="fp-add" class="ghost small-btn" type="button">＋ Ajouter</button>
+            </div>
+            <p class="hint">L'ID est dans l'URL de l'annonce — etsy.com/listing/<b>123456789</b>/… — ou dans le lien « Ouvrir sur Etsy » d'un brouillon créé par l'app.</p>
+            <div id="fin-products" class="fin-products"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- =============== VUE COMPTABILITÉ (PCG) =============== -->
+      <div id="view-compta" class="view hidden">
+        <div class="view-head">
+          <h2>Comptabilité <span class="muted small">— écritures PCG</span></h2>
+          <p class="muted">Journal des ventes &amp; des achats en partie double, depuis tes commandes Etsy.
+            Export FEC (format légal). Lecture seule — rien n'est écrit sur Etsy.</p>
+        </div>
+
+        <div class="cpt-warn">
+          ⚠️ Écritures <b>préparées automatiquement</b> pour faire gagner du temps à ta compta —
+          elles ne remplacent pas un expert-comptable. Vérifie le plan de comptes, et surtout le
+          traitement de la <b>TVA transfrontalière</b> (ventes hors France / OSS) avec un professionnel.
+        </div>
+
+        <div class="card fin-toolbar">
+          <div class="fin-tabs">
+            <button class="cpt-tab active" data-cpttab="ventes" type="button">Journal des ventes</button>
+            <button class="cpt-tab" data-cpttab="achats" type="button">Journal des achats</button>
+            <button class="cpt-tab" data-cpttab="grandlivre" type="button">Grand livre</button>
+            <button class="cpt-tab" data-cpttab="reglages" type="button">Plan de comptes</button>
+          </div>
+          <div class="fin-filters">
+            <select id="cpt-days" title="Période">
+              <option value="30">30 jours</option>
+              <option value="90">90 jours</option>
+              <option value="365" selected>Année</option>
+              <option value="1095">3 ans</option>
+            </select>
+            <button id="cpt-export-fec" class="primary small-btn" title="Fichier des Écritures Comptables (format légal)">⬇ FEC</button>
+            <button id="cpt-export-csv" class="ghost small-btn" title="Export tableur lisible">⬇ CSV</button>
+          </div>
+        </div>
+        <p id="cpt-balance" class="cpt-balance"></p>
+
+        <!-- Journaux (ventes / achats) -->
+        <div id="cpt-journal" class="card hidden">
+          <div id="cpt-journal-body"></div>
+        </div>
+
+        <!-- Grand livre -->
+        <div id="cpt-grandlivre" class="card hidden">
+          <div id="cpt-grandlivre-body"></div>
+        </div>
+
+        <!-- Plan de comptes + TVA -->
+        <div id="cpt-reglages" class="hidden">
+          <div class="grid-2 fin-grid">
+            <div class="card">
+              <h3>TVA</h3>
+              <label class="switch">
+                <input type="checkbox" id="cpt-vat-enabled" />
+                <span class="track"></span>
+                <span class="switch-label">Assujetti à la TVA <span class="muted small">(génère TVA collectée sur les ventes)</span></span>
+              </label>
+              <div class="field" style="margin-top:12px;max-width:200px">
+                <label for="cpt-vat-rate">Taux de TVA (%)</label>
+                <input id="cpt-vat-rate" type="number" step="0.1" min="0" max="100" />
+              </div>
+              <p class="muted small">Désactivé = franchise en base (« TVA non applicable, art. 293 B du CGI »).
+                La TVA transfrontalière (OSS) n'est pas calculée automatiquement.</p>
+              <div class="row-end"><button id="cpt-vat-save" class="primary small-btn" type="button">Enregistrer</button></div>
+            </div>
+            <div class="card">
+              <h3>Plan de comptes PCG</h3>
+              <p class="muted small">Codes des comptes utilisés dans les écritures. Modifie-les pour coller au plan de ton expert-comptable.</p>
+              <div id="cpt-accounts" class="cpt-accounts"></div>
+              <div class="row-end"><button id="cpt-acc-save" class="primary small-btn" type="button">Enregistrer les comptes</button></div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- =============== VUE EASY PICTURE =============== -->
