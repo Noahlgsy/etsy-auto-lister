@@ -148,6 +148,9 @@ CURRENCIES: dict[str, str] = {
     "EUR": "€", "USD": "$", "GBP": "£", "CHF": "CHF", "CNY": "¥",
 }
 
+# Comptes bancaires des associés : qui a payé l'achat fournisseur (clé → nom).
+PAY_ACCOUNTS: dict[str, str] = {"noah": "Noah", "theo": "Théo"}
+
 
 def _to_eur(amount: float, currency: str | None, st: dict[str, float]) -> float:
     """Convertit un montant en € via les taux configurés. EUR → identité.
@@ -174,6 +177,7 @@ def _db() -> sqlite3.Connection:
         ("cost_currency", "TEXT"),    # devise du coût + port saisis (EUR/USD/…)
         ("purchase_date", "TEXT"),    # date d'achat fournisseur (AAAA-MM-JJ)
         ("note", "TEXT"),             # commentaire libre sur la commande
+        ("pay_account", "TEXT"),      # compte bancaire ayant payé (noah/theo)
     ):
         if col not in cols:
             conn.execute(f"ALTER TABLE orders ADD COLUMN {col} {decl}")
@@ -527,6 +531,7 @@ def _compute(
         cost_currency=cost_currency,
         purchase_date=o.get("purchase_date"),
         note=o.get("note"),
+        pay_account=o.get("pay_account"),
         cost_auto=round(cost_auto, 2),
         ship_cost=round(float(ship_cost), 2),
         net=round(revenue - fees - cogs - float(ship_cost), 2),
@@ -829,7 +834,8 @@ def set_shipping(receipt_id: int, fields: dict) -> dict:
     champs présents dans ``fields`` sont modifiés. Aucune écriture Etsy.
     """
     allowed = {"shipped", "tracking_number", "carrier", "ship_note", "note",
-               "shipping_cost", "cost_override", "cost_currency", "purchase_date"}
+               "shipping_cost", "cost_override", "cost_currency", "purchase_date",
+               "pay_account"}
     sets: list[str] = []
     args: list = []
     for key, value in fields.items():
@@ -855,6 +861,12 @@ def set_shipping(receipt_id: int, fields: dict) -> dict:
                     raise FinanceError(400, "Date d'achat invalide (AAAA-MM-JJ).")
             sets.append("purchase_date = ?")
             args.append(value or None)
+        elif key == "pay_account":
+            acct = (value or "").strip().lower() or None
+            if acct is not None and acct not in PAY_ACCOUNTS:
+                raise FinanceError(400, f"Compte bancaire inconnu : {value}.")
+            sets.append("pay_account = ?")
+            args.append(acct)
         else:
             sets.append(f"{key} = ?")
             args.append((str(value).strip() or None) if value is not None else None)

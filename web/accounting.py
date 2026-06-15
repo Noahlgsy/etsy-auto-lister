@@ -46,7 +46,12 @@ ACCOUNTS: dict[str, tuple[str, str]] = {
     "pub": ("6231", "Annonces et insertions"),
     "transport": ("6242", "Transports sur ventes"),
     "banque": ("512", "Banque"),
+    "banque_noah": ("512NOAH", "Banque – Noah"),
+    "banque_theo": ("512THEO", "Banque – Théo"),
 }
+
+# Compte bancaire de l'associé qui a payé → clé de compte dans ACCOUNTS.
+_PAY_ACCOUNT_KEY = {"noah": "banque_noah", "theo": "banque_theo"}
 
 DEFAULT_VAT_RATE = 20.0
 EXCLUDED = finance.EXCLUDED_STATUSES
@@ -237,14 +242,21 @@ def generate(days: int = 365, shop: str | None = None) -> dict:
                 ).date().isoformat()
             if not pay_date:
                 pay_date = date
+            # Compte bancaire selon l'associé qui a payé (Noah / Théo),
+            # sinon compte banque générique.
+            payer = (o.get("pay_account") or "").lower()
+            bk = _PAY_ACCOUNT_KEY.get(payer, "banque")
+            who_paid = finance.PAY_ACCOUNTS.get(payer)
             banque.append({
                 "journal": "BQ", "journal_lib": "Journal de banque",
                 "num": bq_num, "date": pay_date, "piece": piece,
                 "order_no": order_no, "receipt": receipt,
-                "label": f"Paiement AliExpress cde {no} (réf {receipt})",
+                "label": f"Paiement AliExpress cde {no}"
+                         + (f" — {who_paid}" if who_paid else "")
+                         + f" (réf {receipt})",
                 "lines": [
                     _line(acc["four_ali"], lib["four_ali"], debit=paid),
-                    _line(acc["banque"], lib["banque"], credit=paid),
+                    _line(acc[bk], lib[bk], credit=paid),
                 ],
             })
 

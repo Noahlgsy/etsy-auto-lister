@@ -1105,3 +1105,6 @@ table.grid td.act .xs { margin-left: 6px; }
   position: absolute; right: 10px; font-size: 12px; font-weight: 700;
   color: var(--muted); pointer-events: none;
 }
+
+/* Sélecteur « payé par » inline dans la ligne prix d'achat */
+.fin-od-cost .fin-payaccount { width: auto; flex: none; padding: 8px 8px; font-size: 13px; }

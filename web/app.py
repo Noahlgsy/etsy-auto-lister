@@ -1505,6 +1505,7 @@ class FinShipReq(BaseModel):
     cost_currency: str | None = None   # EUR / USD / GBP / CHF / CNY
     purchase_date: str | None = None   # date d'achat fournisseur (AAAA-MM-JJ)
     note: str | None = None            # commentaire libre sur la commande
+    pay_account: str | None = None     # compte bancaire payeur (noah / theo)
 
 
 class FinSettingsReq(BaseModel):

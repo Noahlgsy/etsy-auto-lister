@@ -2531,6 +2531,15 @@ function curOptions(selected) {
   ).join("");
 }
 
+// Comptes bancaires des associés (qui a réglé l'achat).
+const PAY_ACCOUNTS = { noah: "Noah", theo: "Théo" };
+function payerOptions(selected) {
+  const sel = (selected || "").toLowerCase();
+  return `<option value="">payé par…</option>` + Object.entries(PAY_ACCOUNTS).map(([k, v]) =>
+    `<option value="${k}" ${k === sel ? "selected" : ""}>💳 ${v}</option>`
+  ).join("");
+}
+
 // Indice sous le champ prix d'achat : conversion en € si devise étrangère.
 function cptCostHint(o, cur) {
   if (o.cost_override == null) {
@@ -2949,7 +2958,7 @@ function finOrderRow(o) {
       <p class="muted small fin-od-breakdown">
         CA ${finMoney(o.revenue, cur)} − frais ${finMoney(o.fees, cur)} − produit ${finMoney(o.cogs, cur)}${o.cost_override != null ? " ✎" : o.cogs_missing ? " ⚠" : ""}
         − port ${finMoney(o.ship_cost, cur)}${o.shipping_cost != null && o.cost_currency && o.cost_currency !== "EUR" ? ` (${o.shipping_cost} ${CUR_SYM[o.cost_currency] || o.cost_currency})` : ""}
-        = <b>net ${finMoney(o.net, cur)}</b>${o.is_shipped_etsy ? " · marquée expédiée côté Etsy" : ""}
+        = <b>net ${finMoney(o.net, cur)}</b>${o.pay_account ? ` · 💳 payé par ${PAY_ACCOUNTS[o.pay_account] || o.pay_account}` : ""}${o.is_shipped_etsy ? " · marquée expédiée côté Etsy" : ""}
       </p>
       <div class="fin-od-cost">
         <label>Prix d'achat</label>
@@ -2961,6 +2970,7 @@ function finOrderRow(o) {
         <label class="fin-od-date-lbl">acheté le</label>
         <input class="fin-purchasedate" type="date" title="Date d'achat fournisseur (suivi de trésorerie)"
                value="${o.purchase_date || ""}" />
+        <select class="fin-payaccount" title="Quel compte bancaire a payé l'achat">${payerOptions(o.pay_account)}</select>
         <span class="muted small">${cptCostHint(o, cur)}</span>
       </div>
       ${a.formatted ? `<div class="fin-od-addr">
@@ -3007,6 +3017,7 @@ async function finSaveShip(rid) {
     cost_currency: od.querySelector(".fin-costcur").value,
     purchase_date: od.querySelector(".fin-purchasedate").value || null,
     note: od.querySelector(".fin-note").value.trim() || null,
+    pay_account: od.querySelector(".fin-payaccount").value || null,
   };
   try {
     await api(`/api/finance/orders/${rid}/shipping`, {
