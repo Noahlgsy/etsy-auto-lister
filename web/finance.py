@@ -648,9 +648,23 @@ def summary(days: int = 30, shop: str | None = None, country: str | None = None)
     currencies = [o["currency"] for o in orders if o.get("currency")]
     currency = max(set(currencies), key=currencies.count) if currencies else "EUR"
 
+    # Réglé par associé : achats EXPÉDIÉS (= payés) ventilés selon qui a payé,
+    # cohérent avec le journal de banque (512NOAH / 512THEO / 512 générique).
+    paid_by = {k: 0.0 for k in (*PAY_ACCOUNTS, "unassigned")}
+    for o in orders:
+        if not o["shipped"]:
+            continue
+        amt = o["cogs"] + o["ship_cost"]
+        if amt <= 0:
+            continue
+        key = (o.get("pay_account") or "").lower()
+        paid_by[key if key in PAY_ACCOUNTS else "unassigned"] += amt
+    paid_by = {k: round(v, 2) for k, v in paid_by.items()}
+
     return {
         "days": days,
         "currency": currency,
+        "paid_by": paid_by,
         "orders": len(orders),
         "items": sum(o["item_count"] for o in orders),
         "revenue": revenue,

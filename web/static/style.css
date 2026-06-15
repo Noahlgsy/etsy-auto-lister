@@ -1108,3 +1108,17 @@ table.grid td.act .xs { margin-left: 6px; }
 
 /* Sélecteur « payé par » inline dans la ligne prix d'achat */
 .fin-od-cost .fin-payaccount { width: auto; flex: none; padding: 8px 8px; font-size: 13px; }
+
+/* Réglé par associé (Noah / Théo) — tableau de bord */
+.fin-paidby-card { margin-bottom: 16px; }
+.fin-paidby { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.fin-paidby-item {
+  flex: 1 1 160px; min-width: 0; display: flex; flex-direction: column; gap: 1px;
+  padding: 11px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: #faf8f4;
+}
+.fin-paidby-item.total { background: var(--accent-soft); border-color: transparent; }
+.fin-paidby-item.muted { opacity: .7; }
+.fin-paidby-name { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.fin-paidby-val { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
+.fin-paidby-share { font-size: 11.5px; color: var(--muted); }

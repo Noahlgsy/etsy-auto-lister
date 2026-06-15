@@ -2647,6 +2647,7 @@ async function finLoadSummary() {
       (finState.country ? `&country=${enc(finState.country)}` : ""));
     finState.summary = d;
     finRenderKpis();
+    finRenderPaidBy();
     const b = $("#fin-toship");
     b.textContent = d.to_ship;
     b.classList.toggle("hidden", !d.to_ship);
@@ -2690,6 +2691,31 @@ function finRenderKpis() {
     `<span class="fin-kpi-value">${c.value}</span>` +
     `<span class="fin-kpi-sub">${c.sub || ""}</span></div>`
   ).join("");
+}
+
+// Réglé par associé (Noah / Théo) : ce que chacun a sorti pour les achats.
+function finRenderPaidBy() {
+  const s = finState.summary;
+  if (!s || !s.paid_by) return;
+  const cur = s.currency;
+  const p = s.paid_by;
+  const items = [
+    { name: "💳 Noah", val: p.noah || 0 },
+    { name: "💳 Théo", val: p.theo || 0 },
+  ];
+  if ((p.unassigned || 0) > 0.005) {
+    items.push({ name: "Non assigné", val: p.unassigned, muted: true });
+  }
+  const total = items.reduce((a, i) => a + i.val, 0);
+  $("#fin-paidby").innerHTML = items.map((i) =>
+    `<div class="fin-paidby-item${i.muted ? " muted" : ""}">` +
+    `<span class="fin-paidby-name">${i.name}</span>` +
+    `<span class="fin-paidby-val">${finMoney(i.val, cur)}</span>` +
+    `<span class="fin-paidby-share">${total > 0 ? Math.round((i.val / total) * 100) + " %" : ""}</span>` +
+    `</div>`
+  ).join("") +
+    `<div class="fin-paidby-item total"><span class="fin-paidby-name">Total réglé</span>` +
+    `<span class="fin-paidby-val">${finMoney(total, cur)}</span><span class="fin-paidby-share"></span></div>`;
 }
 
 // ---- tendances (graphes SVG) ----------------------------------------------
