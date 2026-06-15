@@ -45,6 +45,7 @@ ACCOUNTS: dict[str, tuple[str, str]] = {
     "paiement": ("627", "Services bancaires (frais de paiement)"),
     "pub": ("6231", "Annonces et insertions"),
     "transport": ("6242", "Transports sur ventes"),
+    "banque": ("512", "Banque"),
 }
 
 DEFAULT_VAT_RATE = 20.0
@@ -141,7 +142,8 @@ def generate(days: int = 365, shop: str | None = None) -> dict:
 
     ventes: list[dict] = []
     achats: list[dict] = []
-    ve_num = ac_num = 0
+    banque: list[dict] = []
+    ve_num = ac_num = bq_num = 0
 
     for o in orders:
         date = datetime.fromtimestamp(o["created_ts"], finance.TZ).strftime("%Y-%m-%d")
@@ -221,6 +223,31 @@ def generate(days: int = 365, shop: str | None = None) -> dict:
                 "lines": lines,
             })
 
+        # ---- Journal de banque (BQ) : paiement du fournisseur AliExpress ----
+        # Une commande EXPÉDIÉE signifie que l'achat AliExpress a été payé : on
+        # solde le fournisseur (401) par la banque (512). Daté à la date d'achat
+        # saisie, sinon à la date d'expédition, sinon à la vente.
+        paid = _r2(cogs + ship_paid)
+        if o.get("shipped") and paid > 0:
+            bq_num += 1
+            pay_date = o.get("purchase_date")
+            if not pay_date and o.get("shipped_at"):
+                pay_date = datetime.fromtimestamp(
+                    o["shipped_at"], finance.TZ
+                ).date().isoformat()
+            if not pay_date:
+                pay_date = date
+            banque.append({
+                "journal": "BQ", "journal_lib": "Journal de banque",
+                "num": bq_num, "date": pay_date, "piece": piece,
+                "order_no": order_no, "receipt": receipt,
+                "label": f"Paiement AliExpress cde {no} (réf {receipt})",
+                "lines": [
+                    _line(acc["four_ali"], lib["four_ali"], debit=paid),
+                    _line(acc["banque"], lib["banque"], credit=paid),
+                ],
+            })
+
     # ---- Journal des achats (AC) : publicité Etsy Ads (par jour) ----
     until = datetime.now(finance.TZ).date()
     for e in finance.ads_entries(days=days):
@@ -242,15 +269,17 @@ def generate(days: int = 365, shop: str | None = None) -> dict:
             ],
         })
     achats.sort(key=lambda e: (e["date"], e["num"]))
+    banque.sort(key=lambda e: (e["date"], e["num"]))
 
-    entries = ventes + achats
+    entries = ventes + achats + banque
     return {
         "vat_enabled": vat,
         "vat_rate": cfg["vat_rate"],
         "ventes": ventes,
         "achats": achats,
+        "banque": banque,
         "totals": _ledger(entries),
-        "summary": _journal_summary(ventes, achats),
+        "summary": _journal_summary(ventes, achats, banque),
     }
 
 
@@ -274,18 +303,19 @@ def _ledger(entries: list[dict]) -> list[dict]:
     return sorted(out, key=lambda s: s["account"])
 
 
-def _journal_summary(ventes: list[dict], achats: list[dict]) -> dict:
+def _journal_summary(ventes: list[dict], achats: list[dict], banque: list[dict]) -> dict:
     def tot(entries: list[dict]) -> dict:
         d = _r2(sum(ln["debit"] for e in entries for ln in e["lines"]))
         c = _r2(sum(ln["credit"] for e in entries for ln in e["lines"]))
         return {"entries": len(entries), "debit": d, "credit": c}
 
-    ve, ac = tot(ventes), tot(achats)
-    grand_d = _r2(ve["debit"] + ac["debit"])
-    grand_c = _r2(ve["credit"] + ac["credit"])
+    ve, ac, bq = tot(ventes), tot(achats), tot(banque)
+    grand_d = _r2(ve["debit"] + ac["debit"] + bq["debit"])
+    grand_c = _r2(ve["credit"] + ac["credit"] + bq["credit"])
     return {
         "ventes": ve,
         "achats": ac,
+        "banque": bq,
         "total": {"debit": grand_d, "credit": grand_c, "balanced": abs(grand_d - grand_c) < 0.01},
     }
 
@@ -312,7 +342,7 @@ _FEC_HEADER = [
 def to_fec(data: dict) -> str:
     """Fichier des Écritures Comptables : 18 colonnes, séparateur tabulation."""
     rows = ["\t".join(_FEC_HEADER)]
-    for e in data["ventes"] + data["achats"]:
+    for e in data["ventes"] + data["achats"] + data["banque"]:
         ecr_num = f"{e['journal']}{e['num']:05d}"
         d = _fec_date(e["date"])
         for ln in e["lines"]:
@@ -334,7 +364,7 @@ def to_csv(data: dict) -> str:
     w = csv.writer(buf, delimiter=";")
     w.writerow(["Date", "Journal", "Pièce", "Compte", "Libellé compte",
                 "Libellé écriture", "Débit", "Crédit"])
-    for e in data["ventes"] + data["achats"]:
+    for e in data["ventes"] + data["achats"] + data["banque"]:
         for ln in e["lines"]:
             w.writerow([
                 e["date"], e["journal"], e["piece"], ln["account"], ln["account_lib"],

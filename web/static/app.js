@@ -3273,7 +3273,7 @@ async function cptOpen() {
 function cptShowTab(tab) {
   cptState.tab = tab;
   $$(".cpt-tab").forEach((b) => b.classList.toggle("active", b.dataset.cpttab === tab));
-  const isJournal = tab === "ventes" || tab === "achats";
+  const isJournal = tab === "ventes" || tab === "achats" || tab === "banque";
   $("#cpt-journal").classList.toggle("hidden", !isJournal);
   $("#cpt-grandlivre").classList.toggle("hidden", tab !== "grandlivre");
   $("#cpt-reglages").classList.toggle("hidden", tab !== "reglages");
@@ -3281,11 +3281,13 @@ function cptShowTab(tab) {
   if (tab === "grandlivre") cptRenderLedger();
 }
 
+const CPT_JOURNAL_LABEL = { ventes: "ventes", achats: "achats", banque: "banque" };
+
 async function cptLoadJournal() {
   try {
     cptState.data = await api(`/api/accounting/journal?days=${cptState.days}${cptShopQ()}`);
     cptRenderBalance();
-    if (cptState.tab === "ventes" || cptState.tab === "achats") cptRenderJournal();
+    if (cptState.tab in CPT_JOURNAL_LABEL) cptRenderJournal();
     if (cptState.tab === "grandlivre") cptRenderLedger();
   } catch (e) { toast("Comptabilité : " + e.message, true); }
 }
@@ -3300,6 +3302,7 @@ function cptRenderBalance() {
     : `<span class="cpt-bad">⚠ déséquilibre</span>`;
   $("#cpt-balance").innerHTML =
     `${vatTxt} · ${d.summary.ventes.entries} ventes · ${d.summary.achats.entries} achats · ` +
+    `${d.summary.banque.entries} règlements banque · ` +
     `total débit ${cptMoney(t.debit)} € = crédit ${cptMoney(t.credit)} € ${eq}`;
 }
 
@@ -3307,8 +3310,8 @@ function cptRenderJournal() {
   const d = cptState.data;
   const box = $("#cpt-journal-body");
   if (!d) { box.innerHTML = `<p class="muted">Chargement…</p>`; return; }
-  const entries = cptState.tab === "ventes" ? d.ventes : d.achats;
-  const sum = cptState.tab === "ventes" ? d.summary.ventes : d.summary.achats;
+  const entries = d[cptState.tab] || [];
+  const sum = d.summary[cptState.tab] || { entries: 0, debit: 0, credit: 0 };
   if (!entries.length) {
     box.innerHTML = `<p class="muted">Aucune écriture sur la période — synchronise tes ventes d'abord.</p>`;
     return;
@@ -3328,7 +3331,7 @@ function cptRenderJournal() {
   box.innerHTML = `<table class="cpt-table"><thead><tr>` +
     `<th>Compte</th><th>Libellé</th><th class="num">Débit</th><th class="num">Crédit</th></tr></thead>` +
     `<tbody>${rows}</tbody>` +
-    `<tfoot><tr><td colspan="2">Total ${cptState.tab === "ventes" ? "ventes" : "achats"} (${sum.entries} écritures)</td>` +
+    `<tfoot><tr><td colspan="2">Total ${CPT_JOURNAL_LABEL[cptState.tab] || cptState.tab} (${sum.entries} écritures)</td>` +
     `<td class="num">${cptMoney(sum.debit)}</td><td class="num">${cptMoney(sum.credit)}</td></tr></tfoot></table>`;
 }
 
