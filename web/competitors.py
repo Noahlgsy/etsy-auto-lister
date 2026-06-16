@@ -19,7 +19,12 @@ from typing import Any
 
 import requests
 
-from src.etsy_client import fetch_listing_full
+from src.etsy_client import (
+    fetch_listing_full,
+    fetch_listing_inventory,
+    fetch_listing_properties,
+    variation_property_names,
+)
 
 from . import niche
 
@@ -137,6 +142,12 @@ def import_listing(ref: str | int, *, fetch_erank: bool = True) -> dict:
     listing_id = parse_listing_id(ref)
     etsy = fetch_listing_full(listing_id)  # raises on HTTP error
 
+    # Variations (couleurs, tailles… avec prix/stock par combinaison) +
+    # attributs (couleur principale, occasion…). Best-effort : un listing sans
+    # variations ou un refus de l'API n'empêche jamais l'import.
+    inventory = fetch_listing_inventory(listing_id)
+    attributes = fetch_listing_properties(etsy.get("shop_id"), listing_id)
+
     # Fresh directory (re-import = refresh)
     d = _dir(listing_id)
     if d.exists():
@@ -183,6 +194,15 @@ def import_listing(ref: str | int, *, fetch_erank: bool = True) -> dict:
         "num_favorers": etsy.get("num_favorers"),
         "views": etsy.get("views"),
         "images": saved_images,
+        "has_variations": etsy.get("has_variations"),
+        "inventory": inventory,        # variations complètes (prix/stock/SKU par combinaison)
+        "attributes": attributes,      # couleur principale, occasion, fête…
+        "personalization": {
+            "is_personalizable": etsy.get("is_personalizable"),
+            "personalization_is_required": etsy.get("personalization_is_required"),
+            "personalization_char_count_max": etsy.get("personalization_char_count_max"),
+            "personalization_instructions": etsy.get("personalization_instructions"),
+        },
         "erank": erank,
         "imported_at": int(time.time()),
     }
@@ -198,6 +218,9 @@ def import_listing(ref: str | int, *, fetch_erank: bool = True) -> dict:
 def summary(record: dict) -> dict:
     """Compact form for the library list."""
     metrics = (record.get("erank") or {}).get("metrics") or {}
+    inventory = record.get("inventory") or {}
+    products = inventory.get("products") or []
+    variation_properties = variation_property_names(inventory)
     return {
         "listing_id": record.get("listing_id"),
         "title": record.get("title"),
@@ -206,6 +229,8 @@ def summary(record: dict) -> dict:
         "shop_name": metrics.get("shop_name"),
         "image_count": len(record.get("images") or []),
         "tag_count": len(record.get("tags") or []),
+        "variation_count": len(products) if len(products) > 1 else 0,
+        "variation_properties": variation_properties,
         "est_sales": metrics.get("est_sales"),
         "est_revenue": metrics.get("est_revenue"),
         "age_days": metrics.get("age_days") or metrics.get("age_in_days"),

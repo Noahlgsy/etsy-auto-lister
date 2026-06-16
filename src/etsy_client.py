@@ -300,7 +300,219 @@ def fetch_listing_full(listing_id: int) -> dict:
         "num_favorers": data.get("num_favorers"),
         "views": data.get("views"),
         "images": images,
+        "has_variations": data.get("has_variations"),
+        "is_personalizable": data.get("is_personalizable"),
+        "personalization_is_required": data.get("personalization_is_required"),
+        "personalization_char_count_max": data.get("personalization_char_count_max"),
+        "personalization_instructions": data.get("personalization_instructions"),
     }
+
+
+def fetch_listing_inventory(listing_id: int) -> dict | None:
+    """Read a public listing's inventory: its variations (couleurs, tailles…)
+    with the per-combination price / quantity / SKU.
+
+    Read-only. Returns the raw getListingInventory payload (products +
+    *_on_property lists), or None if the inventory can't be read — callers
+    degrade gracefully (a listing without variations still imports fine).
+    """
+    headers = get_api_headers()
+    try:
+        resp = requests.get(
+            f"{ETSY_API_BASE}/listings/{listing_id}/inventory",
+            headers=headers,
+            timeout=30,
+        )
+    except Exception:
+        return None
+    if resp.status_code != 200:
+        return None
+    try:
+        data = resp.json()
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def fetch_listing_properties(shop_id: int | str | None, listing_id: int) -> list[dict]:
+    """Read a listing's attribute values (primary color, occasion, holiday…).
+
+    Needs the SOURCE shop's id (returned by getListing). Returns [] on any
+    error — attributes are optional enrichment, never a blocker.
+    """
+    if not shop_id:
+        return []
+    headers = get_api_headers()
+    try:
+        resp = requests.get(
+            f"{ETSY_API_BASE}/shops/{shop_id}/listings/{listing_id}/properties",
+            headers=headers,
+            timeout=30,
+        )
+    except Exception:
+        return []
+    if resp.status_code != 200:
+        return []
+    try:
+        return resp.json().get("results", []) or []
+    except Exception:
+        return []
+
+
+def _money_to_float(value) -> float | None:
+    """Etsy returns prices as {amount, divisor, currency_code}; PUT wants a float."""
+    if isinstance(value, dict):
+        amount = value.get("amount")
+        divisor = value.get("divisor") or 100
+        if isinstance(amount, (int, float)) and divisor:
+            return round(amount / divisor, 2)
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def clean_inventory_for_copy(
+    src_inventory: dict,
+    *,
+    fallback_price: float,
+    readiness_state_id: int | None = None,
+    min_quantity: int = 0,
+) -> dict:
+    """Turn a getListingInventory payload into a valid updateListingInventory body.
+
+    Strips the read-only ids (product_id, offering_id, scale_name), converts the
+    Money prices to floats, and replaces the SOURCE shop's readiness states
+    (meaningless in ours) with our own. Every variation combination and its own
+    price / quantity / SKU is preserved.
+    """
+    products_out: list[dict] = []
+    any_sku = False
+    for p in (src_inventory or {}).get("products") or []:
+        if p.get("is_deleted"):
+            continue
+        pvs = [
+            {
+                "property_id": pv.get("property_id"),
+                "property_name": pv.get("property_name"),
+                "scale_id": pv.get("scale_id"),
+                "value_ids": [v for v in (pv.get("value_ids") or []) if v is not None],
+                "values": [v for v in (pv.get("values") or []) if v],
+            }
+            for pv in (p.get("property_values") or [])
+            if pv.get("property_id") is not None
+        ]
+        offerings = []
+        for o in p.get("offerings") or []:
+            if o.get("is_deleted"):
+                continue
+            price = _money_to_float(o.get("price"))
+            if not price or price <= 0:
+                price = float(fallback_price or 0) or 0.2
+            offering = {
+                "price": max(0.2, round(price, 2)),  # Etsy refuse < $0.20
+                "quantity": max(min_quantity, min(999, int(o.get("quantity") or 0))),
+                "is_enabled": bool(o.get("is_enabled", True)),
+            }
+            if readiness_state_id:
+                offering["readiness_state_id"] = int(readiness_state_id)
+            offerings.append(offering)
+        if not offerings:
+            continue
+        prod: dict = {"property_values": pvs, "offerings": offerings}
+        sku = p.get("sku")
+        if isinstance(sku, str) and sku.strip():
+            prod["sku"] = sku.strip()
+            any_sku = True
+        products_out.append(prod)
+
+    def _ids(key: str) -> list[int]:
+        return [i for i in (src_inventory or {}).get(key) or [] if i is not None]
+
+    return {
+        "products": products_out,
+        "price_on_property": _ids("price_on_property"),
+        "quantity_on_property": _ids("quantity_on_property"),
+        # sku_on_property sans aucun SKU réel → 400 Etsy ; ne le garder que si
+        # les SKU ont effectivement survécu au nettoyage.
+        "sku_on_property": _ids("sku_on_property") if any_sku else [],
+    }
+
+
+def update_listing_inventory(listing_id: int, inventory_body: dict) -> dict:
+    """PUT a (cleaned) inventory body onto OUR listing — writes its variations."""
+    headers = get_api_headers()
+    resp = requests.put(
+        f"{ETSY_API_BASE}/listings/{listing_id}/inventory",
+        headers=headers,
+        json=inventory_body,
+        timeout=60,
+    )
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(
+            f"Failed to update inventory of {listing_id}: "
+            f"{resp.status_code} - {resp.text[:500]}"
+        )
+    return resp.json()
+
+
+def variation_property_names(src_inventory: dict | None) -> list[str]:
+    """Names of the variation axes in an inventory payload (e.g. Color, Size)."""
+    names: list[str] = []
+    for p in (src_inventory or {}).get("products") or []:
+        for pv in p.get("property_values") or []:
+            n = pv.get("property_name")
+            if n and n not in names:
+                names.append(n)
+    return names
+
+
+def copy_listing_variations(
+    listing_id: int,
+    src_inventory: dict,
+    *,
+    fallback_price: float,
+    readiness_state_id: int | None = None,
+) -> dict:
+    """Recreate a source listing's variations on our draft listing.
+
+    Tries the cleaned inventory as-is first, then progressively relaxes the
+    fields most likely to be rejected (the readiness state on offerings, then
+    sold-out quantities of 0) so a copy never fails over a detail. Returns a
+    summary dict; raises RuntimeError only when every attempt failed.
+    """
+    products = (src_inventory or {}).get("products") or []
+    prop_names = variation_property_names(src_inventory)
+    if len(products) <= 1 and not prop_names:
+        return {"copied": False, "reason": "aucune variation", "products": len(products)}
+
+    attempts: list[dict] = []
+    if readiness_state_id:
+        attempts.append(clean_inventory_for_copy(
+            src_inventory, fallback_price=fallback_price,
+            readiness_state_id=readiness_state_id,
+        ))
+    attempts.append(clean_inventory_for_copy(
+        src_inventory, fallback_price=fallback_price,
+    ))
+    attempts.append(clean_inventory_for_copy(
+        src_inventory, fallback_price=fallback_price, min_quantity=1,
+    ))
+
+    last_err: Exception | None = None
+    for body in attempts:
+        if not body["products"]:
+            break
+        try:
+            update_listing_inventory(listing_id, body)
+            return {
+                "copied": True,
+                "products": len(body["products"]),
+                "properties": prop_names,
+            }
+        except RuntimeError as e:
+            last_err = e
+    raise RuntimeError(str(last_err) if last_err else "inventaire source vide")
 
 
 def update_listing(shop_id: str, listing_id: int, **fields) -> dict:
