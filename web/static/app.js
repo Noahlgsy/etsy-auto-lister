@@ -2077,6 +2077,37 @@ async function showDownloaded(id) {
   }
   const imgs = (rec.images || []).map((im, i) =>
     `<img src="/api/competitors/${id}/image/${i}" alt="" loading="lazy" />`).join("");
+  // Variations (couleurs, tailles…) téléchargées avec le listing — prix Etsy
+  // au format Money {amount, divisor}.
+  const invProds = ((rec.inventory || {}).products || []);
+  const invMoney = (m) => {
+    if (m && typeof m === "object" && m.amount != null) return m.amount / (m.divisor || 100);
+    return (typeof m === "number") ? m : null;
+  };
+  const varAxes = [];
+  for (const p of invProds) for (const pv of (p.property_values || [])) {
+    if (pv.property_name && !varAxes.includes(pv.property_name)) varAxes.push(pv.property_name);
+  }
+  const varRows = invProds.length > 1 ? invProds.slice(0, 40).map((p) => {
+    const combo = (p.property_values || []).map((pv) => (pv.values || []).join(", ")).join(" / ") || "—";
+    const off = (p.offerings || [])[0] || {};
+    const pr = invMoney(off.price);
+    return `<tr>
+      <td class="kw">${escapeHtml(combo)}</td>
+      <td class="num">${pr != null ? fmtMoney(pr, rec.currency) : "—"}</td>
+      <td class="num">${fmtInt(off.quantity)}</td>
+      <td class="num">${off.is_enabled === false ? "✕" : "✓"}</td>
+    </tr>`;
+  }).join("") : "";
+  const varBlock = varRows ? `
+    <div class="dl-variations">
+      <h4>Variations (${invProds.length})${varAxes.length ? " — " + escapeHtml(varAxes.join(" × ")) : ""}</h4>
+      <table class="grid">
+        <thead><tr><th>Combinaison</th><th>Prix</th><th>Stock</th><th>Active</th></tr></thead>
+        <tbody>${varRows}</tbody>
+      </table>
+      ${invProds.length > 40 ? `<p class="muted small">… et ${invProds.length - 40} autres combinaisons.</p>` : ""}
+    </div>` : "";
   const metrics = (rec.erank && rec.erank.metrics) || {};
   const tagStats = (rec.erank && rec.erank.tag_stats) || {};
   const tagRows = (rec.tags || []).map((t) => {
@@ -2105,9 +2136,12 @@ async function showDownloaded(id) {
       ${escapeHtml(metrics.shop_name || "")} · ${fmtMoney(rec.price, rec.currency)} ·
       ${fmtInt(metrics.est_sales)} ventes est. · ${fmtMoney(metrics.est_revenue)} ·
       ${fmtAge(metrics.age_days || metrics.age_in_days)} · ${fmtInt(rec.num_favorers)} ❤
+      ${invProds.length > 1 ? ` · ${invProds.length} variations` : ""}
+      ${(rec.personalization || {}).is_personalizable ? " · personnalisable" : ""}
     </div>
     <div id="dl-import-result"></div>
     ${imgs ? `<div class="dl-gallery">${imgs}</div>` : ""}
+    ${varBlock}
     <div class="dl-cols">
       <div>
         <h4>Tags (${(rec.tags || []).length}) — notés par eRank</h4>
@@ -2135,10 +2169,14 @@ async function showDownloaded(id) {
 async function importToDrafts(id, rec) {
   const imgCount = (rec && rec.images) ? rec.images.length : 0;
   const tagCount = (rec && rec.tags) ? rec.tags.length : 0;
+  const varCount = (rec && rec.inventory && (rec.inventory.products || []).length > 1)
+    ? rec.inventory.products.length : 0;
   const name = (rec && rec.title) ? rec.title : id;
   const msg =
     `Créer un BROUILLON Etsy privé à partir de « ${name} » ?\n\n` +
-    `• ${imgCount} photo(s) + titre + description + ${tagCount} tags copiés dans tes brouillons.\n` +
+    `• ${imgCount} photo(s) + titre + description + ${tagCount} tags` +
+    (varCount ? ` + ${varCount} variations (couleurs/tailles, prix & stocks)` : "") +
+    ` copiés dans tes brouillons.\n` +
     `• state = brouillon : NON publié, visible par toi seul·e (pour analyse).\n\n` +
     `⚠️ N'utilise pas les photos/textes d'un concurrent tels quels dans une annonce publiée.`;
   if (!confirm(msg)) return;
@@ -2155,7 +2193,11 @@ async function importToDrafts(id, rec) {
     const multi = state.shops.length > 1;
     const tgtLabel = r.shop_label || shopLabel(state.activeShop);
     const where = multi && tgtLabel ? ` dans ${tgtLabel}` : "";
-    toast(`Brouillon Etsy créé (${r.images_uploaded}/${r.image_total} image(s))${where}.`);
+    const v = r.variations || {};
+    toast(
+      `Brouillon Etsy créé (${r.images_uploaded}/${r.image_total} image(s)` +
+      `${v.copied ? `, ${v.products} variations` : ""})${where}.`
+    );
     if (out) {
       const shopLine = tgtLabel
         ? `<br/><span class="muted small">Boutique cible : <b>${escapeHtml(tgtLabel)}</b>` +
@@ -2166,10 +2208,26 @@ async function importToDrafts(id, rec) {
           `Connecte-toi au compte de <b>${escapeHtml(tgtLabel)}</b> dans ton navigateur ` +
           `avant d'ouvrir le lien, sinon Etsy affiche « Uh oh » (page 404).</span>`
         : "";
+      // Copie complète : variations / personnalisation / attributs copiés aussi.
+      const also = [];
+      if (v.copied) {
+        const axes = (v.properties || []).length ? ` (${v.properties.join(" × ")})` : "";
+        also.push(`${v.products} variation(s)${axes} avec prix & stocks`);
+      }
+      if (r.personalization_copied) also.push("personnalisation");
+      if (r.attributes_copied) also.push(`${r.attributes_copied} attribut(s)`);
+      const alsoLine = also.length
+        ? `<br/><span class="muted small">Copié aussi : ${escapeHtml(also.join(" · "))}.</span>`
+        : "";
+      const varWarn = (!v.copied && v.reason && v.reason !== "aucune variation")
+        ? `<br/><span class="muted small">⚠️ Variations non copiées : ${escapeHtml(v.reason)}</span>`
+        : "";
       out.innerHTML =
         `<div class="result ok">Brouillon Etsy créé : <b>${escapeHtml(r.title)}</b> — ` +
         `${r.images_uploaded}/${r.image_total} image(s) envoyée(s). ` +
         `<a href="${r.admin_url}" target="_blank" rel="noopener">Ouvrir le brouillon sur Etsy ↗</a>` +
+        alsoLine +
+        varWarn +
         shopLine +
         warn +
         `<br/><span class="muted small">Brouillon non publié — pour analyse de la concurrence.</span></div>`;

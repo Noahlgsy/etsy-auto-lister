@@ -44,12 +44,16 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 from src.config import DEFAULTS, load_batch_config
 from src.etsy_client import (
     MAX_IMAGES_PER_LISTING,
+    copy_listing_variations,
     create_draft_listing,
     ensure_readiness_state_id,
+    fetch_listing_inventory,
     get_first_shipping_profile_id,
     get_shop_id,
     listing_admin_url,
     set_listing_attributes,
+    update_listing,
+    update_listing_property,
     upload_listing_image,
 )
 from src.flow import find_video, images_dir
@@ -1017,11 +1021,14 @@ async def niche_suggest_tags(seeds: str, existing: str = "") -> dict:
 def _import_competitor_as_draft(listing_id: int, log=lambda _m: None) -> dict:
     """Recrée un listing concurrent téléchargé en BROUILLON Etsy privé.
 
-    Copie titre / description / tags / matériaux / images du listing analysé
-    dans un brouillon de la boutique de l'utilisateur (state=draft, jamais
-    publié) afin d'étudier la concurrence depuis l'éditeur Etsy. C'est une
-    action déclenchée explicitement par l'utilisateur. À usage d'analyse
-    uniquement : ne publie pas le travail d'autrui tel quel.
+    Copie INTÉGRALE du listing analysé : titre / description / tags /
+    matériaux / prix / quantité / images, plus les VARIATIONS (couleurs,
+    tailles… avec le prix, le stock et le SKU de chaque combinaison), la
+    personnalisation et les attributs (couleur principale, occasion…) — dans
+    un brouillon de la boutique de l'utilisateur (state=draft, jamais publié)
+    afin d'étudier la concurrence depuis l'éditeur Etsy. C'est une action
+    déclenchée explicitement par l'utilisateur. À usage d'analyse uniquement :
+    ne publie pas le travail d'autrui tel quel.
     """
     rec = competitors.get_one(listing_id)
     if rec is None:
@@ -1048,6 +1055,12 @@ def _import_competitor_as_draft(listing_id: int, log=lambda _m: None) -> dict:
         price = 0.0
     if price <= 0:
         price = float(cfg.price)  # le concurrent a presque toujours un prix ; sinon, défaut boutique
+    try:
+        quantity = int(rec.get("quantity"))
+    except (TypeError, ValueError):
+        quantity = 0
+    if quantity <= 0:
+        quantity = int(cfg.quantity)  # quantité du concurrent ; sinon, défaut boutique
 
     shop_id = get_shop_id()
     shipping_profile_id = get_first_shipping_profile_id(shop_id)
@@ -1071,7 +1084,7 @@ def _import_competitor_as_draft(listing_id: int, log=lambda _m: None) -> dict:
         title=title,
         description=description,
         price=price,
-        quantity=int(cfg.quantity),
+        quantity=quantity,
         taxonomy_id=int(taxonomy_id),
         tags=tags,
         materials=materials,
@@ -1081,6 +1094,71 @@ def _import_competitor_as_draft(listing_id: int, log=lambda _m: None) -> dict:
         readiness_state_id=readiness_state_id,
     )
     new_id = listing["listing_id"]
+
+    # — Variations (couleurs, tailles… avec prix/stock/SKU par combinaison) —
+    # Les imports antérieurs à cette fonctionnalité n'ont pas d'inventaire en
+    # cache : on le relit en direct sur Etsy plutôt que d'exiger un ré-import.
+    variations: dict = {"copied": False, "reason": "aucune variation"}
+    src_inventory = rec.get("inventory") or fetch_listing_inventory(listing_id)
+    if src_inventory:
+        try:
+            variations = copy_listing_variations(
+                new_id,
+                src_inventory,
+                fallback_price=price,
+                readiness_state_id=readiness_state_id,
+            )
+            if variations.get("copied"):
+                axes = ", ".join(variations.get("properties") or []) or "—"
+                log(f"  • {variations['products']} variation(s) copiée(s) ({axes})")
+        except RuntimeError as e:
+            variations = {"copied": False, "reason": str(e)[:300]}
+            log(f"  • variations non copiées ({e})")
+
+    # — Personnalisation (champ acheteur) —
+    perso = rec.get("personalization") or {}
+    personalization_copied = False
+    if perso.get("is_personalizable"):
+        fields: dict = {"is_personalizable": "true"}
+        if perso.get("personalization_is_required") is not None:
+            fields["personalization_is_required"] = (
+                "true" if perso["personalization_is_required"] else "false"
+            )
+        if perso.get("personalization_char_count_max"):
+            fields["personalization_char_count_max"] = int(
+                perso["personalization_char_count_max"]
+            )
+        if perso.get("personalization_instructions"):
+            fields["personalization_instructions"] = str(
+                perso["personalization_instructions"]
+            )[:255]
+        try:
+            update_listing(shop_id, new_id, **fields)
+            personalization_copied = True
+            log("  • personnalisation copiée")
+        except Exception as e:  # noqa: BLE001 — champ optionnel, garder le brouillon
+            log(f"  • personnalisation non copiée ({e})")
+
+    # — Attributs (couleur principale, occasion, fête…) — best-effort : un
+    # attribut déjà piloté par une variation ou propre à la catégorie source
+    # est simplement sauté.
+    attributes_copied = 0
+    for prop in rec.get("attributes") or []:
+        prop_id = prop.get("property_id")
+        values = [v for v in (prop.get("values") or []) if v]
+        if not prop_id or not values:
+            continue
+        value_ids = [v for v in (prop.get("value_ids") or []) if v is not None]
+        try:
+            update_listing_property(
+                shop_id, new_id, int(prop_id),
+                value_ids=value_ids, values=values,
+            )
+            attributes_copied += 1
+        except Exception:  # noqa: BLE001
+            pass
+    if attributes_copied:
+        log(f"  • {attributes_copied} attribut(s) copié(s)")
 
     images = competitors.image_paths(listing_id)[:MAX_IMAGES_PER_LISTING]
     uploaded = 0
@@ -1099,6 +1177,9 @@ def _import_competitor_as_draft(listing_id: int, log=lambda _m: None) -> dict:
         "title": title,
         "images_uploaded": uploaded,
         "image_total": len(images),
+        "variations": variations,
+        "personalization_copied": personalization_copied,
+        "attributes_copied": attributes_copied,
         "admin_url": listing_admin_url(new_id),
         "shop_key": target.key,
         "shop_label": target.label,
