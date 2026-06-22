@@ -1,0 +1,21 @@
+# Auto-déploiement : à chaque push sur la branche `theo`, l'appli en ligne
+# (atelier-etsy.fly.dev) se met à jour automatiquement. Gratuit (repo public).
+# Le jeton de déploiement est dans le secret GitHub FLY_API_TOKEN.
+name: Déploiement Fly
+
+on:
+  push:
+    branches: [theo]
+  workflow_dispatch:   # permet aussi de lancer un déploiement à la main depuis GitHub
+
+jobs:
+  deploy:
+    name: Déployer sur Fly.io
+    runs-on: ubuntu-latest
+    concurrency: deploy-group   # un seul déploiement à la fois
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
