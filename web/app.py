@@ -1624,6 +1624,8 @@ class FinShipReq(BaseModel):
     purchase_date: str | None = None   # date d'achat fournisseur (AAAA-MM-JJ)
     note: str | None = None            # commentaire libre sur la commande
     pay_account: str | None = None     # compte bancaire payeur (noah / theo)
+    ali_order: str | None = None       # n° de commande fournisseur AliExpress
+    delivery_date: str | None = None   # date de livraison (AAAA-MM-JJ)
 
 
 class FinSettingsReq(BaseModel):

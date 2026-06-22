@@ -181,6 +181,8 @@ def _db() -> sqlite3.Connection:
         ("purchase_date", "TEXT"),    # date d'achat fournisseur (AAAA-MM-JJ)
         ("note", "TEXT"),             # commentaire libre sur la commande
         ("pay_account", "TEXT"),      # compte bancaire ayant payé (noah/theo)
+        ("ali_order", "TEXT"),        # n° de commande fournisseur AliExpress
+        ("delivery_date", "TEXT"),    # date de livraison (AAAA-MM-JJ)
     ):
         if col not in cols:
             conn.execute(f"ALTER TABLE orders ADD COLUMN {col} {decl}")
@@ -597,6 +599,8 @@ def _compute(
         purchase_date=o.get("purchase_date"),
         note=o.get("note"),
         pay_account=o.get("pay_account"),
+        ali_order=o.get("ali_order"),
+        delivery_date=o.get("delivery_date"),
         cost_auto=round(cost_auto, 2),
         ship_cost=round(float(ship_cost), 2),
         refunded=round(refunded, 2),
@@ -920,7 +924,7 @@ def set_shipping(receipt_id: int, fields: dict) -> dict:
     """
     allowed = {"shipped", "tracking_number", "carrier", "ship_note", "note",
                "shipping_cost", "cost_override", "cost_currency", "purchase_date",
-               "pay_account"}
+               "pay_account", "ali_order", "delivery_date"}
     sets: list[str] = []
     args: list = []
     for key, value in fields.items():
@@ -938,13 +942,13 @@ def set_shipping(receipt_id: int, fields: dict) -> dict:
                 raise FinanceError(400, f"Devise non supportée : {value}.")
             sets.append("cost_currency = ?")
             args.append(cur)
-        elif key == "purchase_date":
+        elif key in ("purchase_date", "delivery_date"):
             if value:
                 try:
                     datetime.strptime(value, "%Y-%m-%d")
                 except ValueError:
-                    raise FinanceError(400, "Date d'achat invalide (AAAA-MM-JJ).")
-            sets.append("purchase_date = ?")
+                    raise FinanceError(400, "Date invalide (AAAA-MM-JJ).")
+            sets.append(f"{key} = ?")
             args.append(value or None)
         elif key == "pay_account":
             acct = (value or "").strip().lower() or None

@@ -3068,6 +3068,12 @@ function finOrderRow(o) {
         </span>
         <button class="primary small-btn fin-save-ship" data-rid="${o.receipt_id}" type="button">Enregistrer</button>
       </div>
+      <div class="fin-od-supplier">
+        <label>📦 N° AliExpress</label>
+        <input class="fin-aliorder" type="text" placeholder="ex : 3074…" value="${escapeHtml(o.ali_order || "")}" />
+        <label class="fin-od-date-lbl">🚚 livré le</label>
+        <input class="fin-deliverydate" type="date" title="Date de livraison au client" value="${o.delivery_date || ""}" />
+      </div>
       <div class="fin-od-note">
         <label>💬 Commentaire</label>
         <input class="fin-note" type="text" placeholder="Note libre sur cette commande…" value="${escapeHtml(o.note || "")}" />
@@ -3094,6 +3100,8 @@ async function finSaveShip(rid) {
     purchase_date: od.querySelector(".fin-purchasedate").value || null,
     note: od.querySelector(".fin-note").value.trim() || null,
     pay_account: od.querySelector(".fin-payaccount").value || null,
+    ali_order: od.querySelector(".fin-aliorder").value.trim() || null,
+    delivery_date: od.querySelector(".fin-deliverydate").value || null,
   };
   try {
     await api(`/api/finance/orders/${rid}/shipping`, {
