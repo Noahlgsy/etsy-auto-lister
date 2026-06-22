@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -33,7 +34,9 @@ from src.auth import get_api_headers
 from src.etsy_client import ETSY_API_BASE
 
 ROOT = Path(__file__).resolve().parent.parent
-DB_PATH = ROOT / "data" / "finance.db"
+# Emplacement de la base : configurable (FINANCE_DB) pour pointer vers un volume
+# persistant en déploiement cloud ; par défaut data/finance.db en local.
+DB_PATH = Path(os.environ.get("FINANCE_DB") or (ROOT / "data" / "finance.db"))
 
 # Les heures/jours des tendances sont exprimés dans le fuseau du vendeur.
 TZ = ZoneInfo("Europe/Paris")

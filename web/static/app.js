@@ -3483,7 +3483,33 @@ function wireDropzone() {
   });
 }
 
+// Adapte l'UI au déploiement : en mode cloud, seuls Ventes + Comptabilité sont
+// pertinents (la génération d'images tourne en local). Ajoute aussi un lien de
+// déconnexion si un login est actif.
+async function applyEnv() {
+  try { state.env = await api("/api/env"); } catch (_) { state.env = {}; }
+  const e = state.env || {};
+  if (e.cloud_mode) {
+    document.body.classList.add("cloud");
+    const keep = new Set(["ventes", "compta"]);
+    $$(".nav-btn").forEach((b) => { if (!keep.has(b.dataset.view)) b.style.display = "none"; });
+  }
+  if (e.auth) {
+    const status = document.querySelector(".status");
+    if (status && !$("#logout-link")) {
+      const a = document.createElement("a");
+      a.id = "logout-link"; a.href = "/logout"; a.className = "shop-link";
+      a.textContent = "Déconnexion";
+      status.appendChild(a);
+    }
+  }
+  return e;
+}
+
 async function init() {
+  const env = await applyEnv();
+  const cloud = !!env.cloud_mode;
+
   try {
     state.config = await api("/api/config");
     $("#cfg-base-tag").value = state.config.base_tag || "";
@@ -3491,13 +3517,19 @@ async function init() {
     $("#cfg-language").value = state.config.language || "en";
   } catch (_) {}
 
-  await loadFolders();
-  await loadInputs();
-  await loadPrompts();
+  if (!cloud) {
+    await loadFolders();
+    await loadInputs();
+    await loadPrompts();
+  }
   await loadShops();
   populateColorSelects();
-  checkServices();
-  state.servicesTimer = setInterval(checkServices, 25000);
+  if (cloud) {
+    showView("ventes");            // pas d'Atelier en ligne : on démarre sur Ventes
+  } else {
+    checkServices();
+    state.servicesTimer = setInterval(checkServices, 25000);
+  }
 
   // Re-attach to a generation that may already be running (e.g. page refresh).
   try {

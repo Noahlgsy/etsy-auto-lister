@@ -21,6 +21,7 @@ import io
 import json
 import os
 import re
+import secrets
 import shutil
 import time
 import unicodedata
@@ -29,8 +30,15 @@ from pathlib import Path
 import anthropic
 import requests
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
 from PIL import Image
 from pydantic import BaseModel
 
@@ -39,7 +47,10 @@ from pydantic import BaseModel
 # the surrounding shell exports can't shadow the real key from .env.
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
+# Emplacement du .env : configurable (ETSY_ENV_FILE) pour pointer vers un volume
+# persistant en cloud — la rotation du refresh token Etsy doit y survivre.
+_ENV_FILE = os.environ.get("ETSY_ENV_FILE") or (Path(__file__).resolve().parent.parent / ".env")
+load_dotenv(_ENV_FILE, override=True)
 
 from src.config import DEFAULTS, load_batch_config
 from src.etsy_client import (
@@ -80,6 +91,109 @@ ALLOWED_IMG_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 DEFAULT_OCCASION = "Birthday"
 
 app = FastAPI(title="Etsy Auto-Lister")
+
+# --------------------------------------------------------------------------- #
+# Déploiement cloud + authentification (tout est piloté par variables d'env ;
+# en local, aucune n'est définie → comportement identique à avant).
+#   CLOUD_MODE=1     : masque les onglets locaux (Atelier/Flow/eRank) côté UI
+#                      et bloque les endpoints qui pilotent Chrome en local.
+#   APP_PASSWORD=... : protège TOUTE l'appli derrière un login (mot de passe
+#                      partagé). Non défini → aucune authentification (local).
+#   SESSION_SECRET   : clé de signature du cookie de session (sinon éphémère).
+# --------------------------------------------------------------------------- #
+CLOUD_MODE = os.environ.get("CLOUD_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
+SESSION_SECRET = os.environ.get("SESSION_SECRET") or secrets.token_hex(32)
+
+# Chemins toujours accessibles sans être connecté (login + sonde de santé Fly).
+_PUBLIC_PATHS = {"/login", "/logout", "/healthz"}
+
+
+def _block_in_cloud(what: str = "Cette fonction") -> None:
+    """Bloque proprement une fonction qui exige Chrome/Flow/eRank en local."""
+    if CLOUD_MODE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{what} n'est pas disponible en ligne (génération d'images "
+            "et services eRank/Flow tournent uniquement en local).",
+        )
+
+
+if APP_PASSWORD:
+    @app.middleware("http")
+    async def _auth_gate(request: Request, call_next):
+        """Exige une session connectée, sauf pour les chemins publics."""
+        path = request.url.path
+        if path not in _PUBLIC_PATHS and not request.session.get("ok"):
+            if path.startswith("/api/"):
+                return JSONResponse({"detail": "Connexion requise."}, status_code=401)
+            return RedirectResponse("/login", status_code=302)
+        return await call_next(request)
+
+    # Ajouté APRÈS le gate pour l'envelopper (la session est dispo dans le gate).
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=SESSION_SECRET,
+        https_only=CLOUD_MODE,
+        same_site="lax",
+        max_age=60 * 60 * 24 * 30,
+    )
+
+
+_LOGIN_PAGE = """<!doctype html><html lang="fr"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Atelier Etsy — Connexion</title><style>
+*{box-sizing:border-box} body{margin:0;height:100vh;display:grid;place-items:center;
+font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f4f1ec;color:#211e1a}
+.box{background:#fff;border:1px solid #e4e0d8;border-radius:14px;padding:28px;width:320px;
+box-shadow:0 8px 22px rgba(0,0,0,.06);text-align:center}
+.logo{width:46px;height:46px;margin:0 auto 14px;display:grid;place-items:center;border-radius:12px;
+background:linear-gradient(135deg,#f1641e,#ff8a4a);color:#fff;font-size:22px}
+h1{font-size:17px;margin:0 0 4px}.sub{color:#8a8579;font-size:13px;margin:0 0 18px}
+input{width:100%;padding:11px 12px;border:1px solid #d8d2c6;border-radius:9px;font-size:15px}
+button{width:100%;margin-top:12px;padding:11px;border:0;border-radius:9px;background:#f1641e;
+color:#fff;font-weight:700;font-size:15px;cursor:pointer}button:hover{background:#d4530f}
+.err{color:#c0392b;font-size:13px;margin:10px 0 0}</style></head>
+<body><form class="box" method="post" action="/login">
+<div class="logo">◆</div><h1>Atelier Etsy</h1>
+<p class="sub">Accès privé — Noah &amp; Théo</p>
+<input type="password" name="password" placeholder="Mot de passe" autofocus required/>
+<button type="submit">Se connecter</button>__ERR__</form></body></html>"""
+
+
+@app.get("/healthz", include_in_schema=False)
+def healthz() -> dict:
+    """Sonde de santé (utilisée par l'hébergeur)."""
+    return {"ok": True}
+
+
+@app.get("/login", include_in_schema=False)
+def login_page() -> HTMLResponse:
+    return HTMLResponse(_LOGIN_PAGE.replace("__ERR__", ""))
+
+
+@app.post("/login", include_in_schema=False)
+async def login_submit(request: Request):
+    form = await request.form()
+    password = str(form.get("password", ""))
+    if APP_PASSWORD and secrets.compare_digest(password, APP_PASSWORD):
+        request.session["ok"] = True
+        return RedirectResponse("/", status_code=302)
+    err = '<p class="err">Mot de passe incorrect.</p>'
+    return HTMLResponse(_LOGIN_PAGE.replace("__ERR__", err), status_code=401)
+
+
+@app.get("/logout", include_in_schema=False)
+def logout(request: Request):
+    if APP_PASSWORD:
+        request.session.clear()
+    return RedirectResponse("/login", status_code=302)
+
+
+@app.get("/api/env")
+def env_info() -> dict:
+    """Infos d'environnement pour le frontend (mode cloud, login actif)."""
+    return {"cloud_mode": CLOUD_MODE, "auth": bool(APP_PASSWORD)}
 
 
 @app.exception_handler(finance.FinanceError)
@@ -789,6 +903,7 @@ class GenerateReq(BaseModel):
 @app.post("/api/generate")
 def generate(req: GenerateReq) -> dict:
     """Start the background pipeline: Flow images -> listing (-> draft)."""
+    _block_in_cloud("La génération d'images")
     if jobs.is_busy():
         raise HTTPException(status_code=409, detail="Une génération est déjà en cours.")
     names: list[str] = []
@@ -885,6 +1000,7 @@ def flow_health() -> dict:
 @app.post("/api/flow/start")
 def flow_start() -> dict:
     """Launch Chrome + Google Flow if it isn't already running (blocks up to ~60s)."""
+    _block_in_cloud("Le lancement de Google Flow")
     if jobs.flow_is_up() and jobs.flow_has_labs_tab():
         return {"up": True, "already": True}
     try:
@@ -939,6 +1055,7 @@ def niche_health() -> dict:
 @app.post("/api/niche/start")
 def niche_start() -> dict:
     """Launch the niche-detector service on :8770 if it isn't already running."""
+    _block_in_cloud("Le service eRank (niche-detector)")
     try:
         return niche.launch(timeout=45)
     except Exception as e:  # noqa: BLE001
@@ -1387,6 +1504,7 @@ def easypic_generate(item_id: str, req: EasyPicGenerateReq) -> dict:
                      sélectionnées (aperçu, sans Flow) — pour étudier la fiche.
     Réutilise le même moteur de jobs que l'Atelier (une génération à la fois).
     """
+    _block_in_cloud("Easy Picture (génération d'images)")
     rec = easypic.get_one(item_id)
     if rec is None:
         raise HTTPException(status_code=404, detail="Référence introuvable.")
@@ -1692,7 +1810,10 @@ app.mount("/", StaticFiles(directory=str(STATIC), html=True), name="static")
 def main() -> None:
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    # HOST/PORT configurables : 0.0.0.0:8080 en cloud (Fly), 127.0.0.1:8000 en local.
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":

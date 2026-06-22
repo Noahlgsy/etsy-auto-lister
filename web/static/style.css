@@ -1122,3 +1122,10 @@ table.grid td.act .xs { margin-left: 6px; }
 .fin-paidby-name { font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .fin-paidby-val { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
 .fin-paidby-share { font-size: 11.5px; color: var(--muted); }
+
+/* ---------- Mode cloud (hébergé) ---------- */
+/* Pas de génération locale → pas de sidebar « Produits » ni de pastilles
+   de services locaux (eRank/Flow). Layout en pleine largeur. */
+body.cloud .layout { grid-template-columns: 1fr; }
+body.cloud .sidebar { display: none; }
+body.cloud .status .pill { display: none; }

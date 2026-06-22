@@ -28,7 +28,7 @@ from . import shops
 from .auth import headers_for_refresh_token
 
 ETSY_API_BASE = "https://openapi.etsy.com/v3/application"
-ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+ENV_PATH = Path(os.environ.get("ETSY_ENV_FILE") or (Path(__file__).resolve().parent.parent / ".env"))
 
 
 def _api_get(path: str, headers: dict, params: dict | None = None) -> requests.Response:

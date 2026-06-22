@@ -1,0 +1,30 @@
+# Ne JAMAIS embarquer secrets / données perso / environnement local dans l'image
+.env
+.env.*
+!.env.example
+data/finance.db
+data/finance.db-*
+data/listing_thumbs/
+data/competitors/
+data/easypic/
+batch.txt
+
+# Python local
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Git / OS / éditeurs
+.git/
+.gitignore
+.DS_Store
+.idea/
+.vscode/
+.claude/
+
+# Doc / scripts non nécessaires dans l'image
+start.command
+DEPLOY.md
+*.md

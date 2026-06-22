@@ -40,7 +40,7 @@ CALLBACK_PORT = 3003
 # été créé sans ce scope, relance `python -m src.auth` pour ré-autoriser.
 SCOPES = "listings_w listings_r listings_d shops_r shops_w transactions_r email_r"
 
-ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+ENV_PATH = Path(os.environ.get("ETSY_ENV_FILE") or (Path(__file__).resolve().parent.parent / ".env"))
 
 
 def _generate_pkce() -> tuple[str, str]:

@@ -16,7 +16,7 @@ from .auth import get_api_headers
 
 ETSY_API_BASE = "https://openapi.etsy.com/v3/application"
 
-ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+ENV_PATH = Path(os.environ.get("ETSY_ENV_FILE") or (Path(__file__).resolve().parent.parent / ".env"))
 load_dotenv(ENV_PATH)
 
 MAX_IMAGES_PER_LISTING = 10

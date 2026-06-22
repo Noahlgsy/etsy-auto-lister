@@ -1,0 +1,37 @@
+# Configuration Fly.io — Atelier Etsy (dashboard Ventes / Trésorerie / Compta).
+# Renomme "app" si le nom est déjà pris ; `fly launch` peut le faire pour toi.
+app = "atelier-etsy"
+primary_region = "cdg"  # Paris
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  HOST = "0.0.0.0"
+  PORT = "8080"
+  CLOUD_MODE = "1"
+  FINANCE_DB = "/data/finance.db"
+  ETSY_ENV_FILE = "/data/.env"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"      # s'éteint quand personne ne l'utilise (gratuit au repos)
+  auto_start_machines = true       # se rallume à la 1re requête (~quelques secondes)
+  min_machines_running = 0
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/healthz"
+
+# Base SQLite + .env persistant (refresh token rotatif) sur un volume.
+[mounts]
+  source = "etsy_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

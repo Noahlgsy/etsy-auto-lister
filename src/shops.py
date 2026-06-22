@@ -36,7 +36,7 @@ from typing import Iterator
 
 from dotenv import load_dotenv
 
-ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+ENV_PATH = Path(os.environ.get("ETSY_ENV_FILE") or (Path(__file__).resolve().parent.parent / ".env"))
 
 # Slots scanned when listing shops. "1" maps to the legacy unsuffixed keys.
 _MAX_SLOTS = 9
