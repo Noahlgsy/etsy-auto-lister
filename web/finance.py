@@ -509,6 +509,20 @@ def _order_extras_from_raw(raw_json: str | None) -> dict:
     }
 
 
+def _refund_total(raw_json: str | None) -> float:
+    """Montant total remboursé (remboursements Etsy réussis), en devise commande."""
+    try:
+        r = json.loads(raw_json or "{}")
+    except Exception:  # noqa: BLE001
+        return 0.0
+    total = 0.0
+    for ref in r.get("refunds") or []:
+        status = (ref.get("status") or "").upper()
+        if status in ("", "SUCCESS", "COMPLETE", "COMPLETED"):
+            total += _money(ref.get("amount"))
+    return round(total, 2)
+
+
 def _compute(
     order: sqlite3.Row, st: dict, costs: dict[int, float], *, with_address: bool = False
 ) -> dict:
@@ -522,6 +536,7 @@ def _compute(
     items = json.loads(o.pop("items_json") or "[]")
     raw = o.pop("raw_json", None)
     o["items"] = items
+    refunded = _refund_total(raw)
     if with_address:
         o["address"] = _address_from_raw(raw)
         extras = _order_extras_from_raw(raw)
@@ -565,7 +580,12 @@ def _compute(
         ship_cost = _to_eur(float(raw_ship), cost_currency, st)
     else:
         ship_cost = st["default_shipping_cost"]
-    excluded = (o["status"] or "") in EXCLUDED_STATUSES
+
+    # Remboursement : total → la commande ne compte plus (comme une annulation) ;
+    # partiel → déduit du net (de l'argent reparti).
+    grand = o.get("grandtotal") or (o["subtotal"] + o["shipping_charged"] + o["tax"])
+    fully_refunded = refunded > 0 and refunded >= round(float(grand), 2) - 0.01
+    excluded = (o["status"] or "") in EXCLUDED_STATUSES or fully_refunded
 
     o.update(
         revenue=round(revenue, 2),
@@ -579,7 +599,9 @@ def _compute(
         pay_account=o.get("pay_account"),
         cost_auto=round(cost_auto, 2),
         ship_cost=round(float(ship_cost), 2),
-        net=round(revenue - fees - cogs - float(ship_cost), 2),
+        refunded=round(refunded, 2),
+        fully_refunded=fully_refunded,
+        net=round(revenue - fees - cogs - float(ship_cost) - refunded, 2),
         excluded=excluded,
         shipped=bool(o["shipped"]),
         is_shipped_etsy=bool(o["is_shipped_etsy"]),
@@ -849,10 +871,13 @@ def list_orders(
 ) -> dict:
     """Liste paginée des commandes de la fenêtre (avec frais/net calculés)."""
     orders = _orders_window(days, shop, country, with_address=True)
+    with_message = sum(1 for o in orders if o.get("message"))
     if ship == "to_ship":
         orders = [o for o in orders if not o["shipped"] and not o["excluded"]]
     elif ship == "shipped":
         orders = [o for o in orders if o["shipped"]]
+    elif ship == "message":
+        orders = [o for o in orders if o.get("message")]
     total = len(orders)
     limit = max(1, min(int(limit), 200))
     offset = max(0, int(offset))
@@ -864,6 +889,7 @@ def list_orders(
         "orders": page,
         "total": total,
         "to_ship": _to_ship_count(shop),
+        "with_message": with_message,
     }
 
 

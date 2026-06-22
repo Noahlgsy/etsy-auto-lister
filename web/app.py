@@ -1687,8 +1687,8 @@ def finance_orders(
     limit: int = 50,
     offset: int = 0,
 ) -> dict:
-    if ship not in ("all", "to_ship", "shipped"):
-        raise HTTPException(status_code=400, detail="ship doit être all, to_ship ou shipped.")
+    if ship not in ("all", "to_ship", "shipped", "message"):
+        raise HTTPException(status_code=400, detail="ship doit être all, to_ship, shipped ou message.")
     return finance.list_orders(
         days=days, shop=shop, country=country, ship=ship, limit=limit, offset=offset
     )

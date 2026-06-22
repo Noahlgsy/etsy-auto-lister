@@ -1152,8 +1152,6 @@ body.cloud .status .pill { display: none; }
 .fin-od-item-price { font-weight: 700; white-space: nowrap; }
 
 /* Message de l'acheteur */
-.fin-o-msg { flex: none; text-decoration: none; font-size: 15px; line-height: 1; cursor: pointer; }
-.fin-o-msg:hover { transform: scale(1.15); }
 .fin-o-msg-empty { width: 15px; flex: none; }   /* aligne les lignes sans message */
 .fin-od-message {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -1162,3 +1160,14 @@ body.cloud .status .pill { display: none; }
 }
 .fin-od-message.gift { background: #f1f8f3; border-color: #cfe7d6; }
 .fin-od-message-txt { font-size: 13px; line-height: 1.45; min-width: 0; }
+
+/* 💬 message acheteur — pastille bien visible + pastille remboursement */
+.fin-o-msg {
+  flex: none; text-decoration: none; display: inline-flex; align-items: center;
+  font-size: 13px; line-height: 1; padding: 4px 7px; border-radius: 999px;
+  background: var(--accent-soft); border: 1px solid #f3d8be;
+}
+.fin-o-msg:hover { background: #fce3d5; border-color: var(--accent); }
+.fin-ship-chip.refund {
+  background: #fde7e7; color: #b13b2e; border: 1px solid #f0cdc8;
+}

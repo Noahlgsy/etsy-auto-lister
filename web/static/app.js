@@ -2948,6 +2948,8 @@ async function finLoadOrders(reset = false) {
     else box.insertAdjacentHTML("beforeend", html);
     $("#fin-orders-count").textContent =
       `${d.total} commande${d.total > 1 ? "s" : ""} · ${d.to_ship} à expédier (toutes périodes)`;
+    const mc = $("#fin-msg-count");
+    if (mc) { mc.textContent = d.with_message || ""; mc.classList.toggle("hidden", !d.with_message); }
     $("#fin-more").classList.toggle("hidden", finState.offset + finState.limit >= d.total);
   } catch (e) { toast("Commandes : " + e.message, true); }
 }
@@ -2961,10 +2963,16 @@ function finOrderRow(o) {
     (it.quantity > 1 ? `${it.quantity} × ` : "") + (it.title || `Listing ${it.listing_id}`)
   ).join(" · ");
   const shipChip = o.excluded
-    ? `<span class="fin-ship-chip excl">✕ ${escapeHtml(o.status)}</span>`
+    ? (o.fully_refunded
+        ? `<span class="fin-ship-chip refund">↩ Remboursée</span>`
+        : `<span class="fin-ship-chip excl">✕ ${escapeHtml(o.status)}</span>`)
     : o.shipped
       ? `<span class="fin-ship-chip ok">✓ Expédiée</span>`
       : `<span class="fin-ship-chip todo">📦 À expédier</span>`;
+  // Remboursement partiel sur une commande encore comptée.
+  const refundBadge = (o.refunded > 0 && !o.fully_refunded)
+    ? `<span class="fin-ship-chip refund" title="Remboursement partiel — déduit du net">↩ −${finMoney(o.refunded, cur)}</span>`
+    : "";
   const a = o.address || {};
   const addrCompact = [a.street, a.city_line, countryName(o.buyer_country)]
     .filter(Boolean).join(", ");
@@ -3007,7 +3015,7 @@ function finOrderRow(o) {
       <span class="fin-o-qty" title="${o.item_count} article${o.item_count > 1 ? "s" : ""}">×${o.item_count}</span>
       <span class="fin-o-rev">${finMoney(o.revenue, cur)}</span>
       <span class="fin-o-net${o.net < 0 ? " neg" : ""}">${o.excluded ? "" : "net " + finMoney(o.net, cur)}</span>
-      ${shipChip}
+      ${shipChip}${refundBadge}
       ${o.message
         ? `<a class="fin-o-msg" href="${etsyConvoUrl(o.buyer_user_id)}" target="_blank" rel="noopener"
              title="Message de l'acheteur — clic = ouvrir la conversation sur Etsy&#10;&#10;${escapeHtml(o.message)}"
@@ -3017,7 +3025,7 @@ function finOrderRow(o) {
     <div class="fin-order-detail hidden" id="fin-od-${o.receipt_id}">
       <p class="muted small fin-od-breakdown">
         CA ${finMoney(o.revenue, cur)} − frais ${finMoney(o.fees, cur)} − produit ${finMoney(o.cogs, cur)}${o.cost_override != null ? " ✎" : o.cogs_missing ? " ⚠" : ""}
-        − port ${finMoney(o.ship_cost, cur)}${o.shipping_cost != null && o.cost_currency && o.cost_currency !== "EUR" ? ` (${o.shipping_cost} ${CUR_SYM[o.cost_currency] || o.cost_currency})` : ""}
+        − port ${finMoney(o.ship_cost, cur)}${o.shipping_cost != null && o.cost_currency && o.cost_currency !== "EUR" ? ` (${o.shipping_cost} ${CUR_SYM[o.cost_currency] || o.cost_currency})` : ""}${o.refunded > 0 ? ` − remboursé ${finMoney(o.refunded, cur)}` : ""}
         = <b>net ${finMoney(o.net, cur)}</b>${o.pay_account ? ` · 💳 payé par ${PAY_ACCOUNTS[o.pay_account] || o.pay_account}` : ""}${o.is_shipped_etsy ? " · marquée expédiée côté Etsy" : ""}
       </p>
       <div class="fin-od-items">${itemsHtml}</div>
