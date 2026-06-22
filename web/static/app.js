@@ -2531,6 +2531,14 @@ function curOptions(selected) {
   ).join("");
 }
 
+// Lien vers la conversation Etsy avec un acheteur (format historique Shop
+// Manager ; si Etsy l'a changé, ça retombe sur la boîte de messages).
+function etsyConvoUrl(buyerId) {
+  return buyerId
+    ? `https://www.etsy.com/your/conversations/new?with_id=${buyerId}`
+    : "https://www.etsy.com/your/conversations";
+}
+
 // Comptes bancaires des associés (qui a réglé l'achat).
 const PAY_ACCOUNTS = { noah: "Noah", theo: "Théo" };
 function payerOptions(selected) {
@@ -2960,6 +2968,27 @@ function finOrderRow(o) {
   const a = o.address || {};
   const addrCompact = [a.street, a.city_line, countryName(o.buyer_country)]
     .filter(Boolean).join(", ");
+  // Détail par article (variations/SKU si dispo, sinon items simples).
+  const detItems = (o.items_detail && o.items_detail.length) ? o.items_detail : (o.items || []);
+  const itemsHtml = detItems.map((it) =>
+    `<div class="fin-od-item">` +
+    (it.listing_id
+      ? `<img class="fin-od-item-img" alt="" src="/api/finance/listing-image/${it.listing_id}" onerror="this.style.visibility='hidden'" />`
+      : `<span class="fin-od-item-img"></span>`) +
+    `<div class="fin-od-item-body">` +
+    `<div class="fin-od-item-title">${escapeHtml(it.title || ("Listing " + it.listing_id))}` +
+    `<span class="fin-od-item-qty">×${it.quantity || 1}</span></div>` +
+    ((it.variations && it.variations.length)
+      ? `<div class="fin-od-item-var">${it.variations.map((v) =>
+          `${escapeHtml(v.name)} : <b>${escapeHtml(v.value)}</b>`).join(" · ")}</div>`
+      : "") +
+    (it.sku ? `<div class="fin-od-item-sku">SKU ${escapeHtml(it.sku)}</div>` : "") +
+    `</div>` +
+    (it.price != null
+      ? `<span class="fin-od-item-price">${finMoney(it.price * (it.quantity || 1), cur)}</span>`
+      : "") +
+    `</div>`
+  ).join("");
   return `<div class="fin-order${o.excluded ? " excluded" : ""}" data-rid="${o.receipt_id}">
     <div class="fin-order-main" data-fin-toggle="${o.receipt_id}">
       <span class="fin-o-num" title="N° de commande">#${o.seq ?? "–"}</span>
@@ -2979,6 +3008,11 @@ function finOrderRow(o) {
       <span class="fin-o-rev">${finMoney(o.revenue, cur)}</span>
       <span class="fin-o-net${o.net < 0 ? " neg" : ""}">${o.excluded ? "" : "net " + finMoney(o.net, cur)}</span>
       ${shipChip}
+      ${o.message
+        ? `<a class="fin-o-msg" href="${etsyConvoUrl(o.buyer_user_id)}" target="_blank" rel="noopener"
+             title="Message de l'acheteur — clic = ouvrir la conversation sur Etsy&#10;&#10;${escapeHtml(o.message)}"
+             onclick="event.stopPropagation()">💬</a>`
+        : `<span class="fin-o-msg-empty"></span>`}
     </div>
     <div class="fin-order-detail hidden" id="fin-od-${o.receipt_id}">
       <p class="muted small fin-od-breakdown">
@@ -2986,6 +3020,14 @@ function finOrderRow(o) {
         − port ${finMoney(o.ship_cost, cur)}${o.shipping_cost != null && o.cost_currency && o.cost_currency !== "EUR" ? ` (${o.shipping_cost} ${CUR_SYM[o.cost_currency] || o.cost_currency})` : ""}
         = <b>net ${finMoney(o.net, cur)}</b>${o.pay_account ? ` · 💳 payé par ${PAY_ACCOUNTS[o.pay_account] || o.pay_account}` : ""}${o.is_shipped_etsy ? " · marquée expédiée côté Etsy" : ""}
       </p>
+      <div class="fin-od-items">${itemsHtml}</div>
+      ${o.message ? `<div class="fin-od-message">
+        <div class="fin-od-message-txt">💬 <b>Message de l'acheteur :</b> « ${escapeHtml(o.message)} »</div>
+        <a class="primary small-btn" href="${etsyConvoUrl(o.buyer_user_id)}" target="_blank" rel="noopener">Répondre sur Etsy ↗</a>
+      </div>` : ""}
+      ${o.gift_message ? `<div class="fin-od-message gift">
+        <div class="fin-od-message-txt">🎁 <b>Message cadeau :</b> « ${escapeHtml(o.gift_message)} »</div>
+      </div>` : ""}
       <div class="fin-od-cost">
         <label>Prix d'achat</label>
         <input class="fin-costoverride" type="number" step="0.01" min="0"

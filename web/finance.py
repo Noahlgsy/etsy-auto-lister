@@ -473,6 +473,42 @@ def _address_from_raw(raw_json: str | None) -> dict:
     }
 
 
+def _order_extras_from_raw(raw_json: str | None) -> dict:
+    """Détails par article (variations, SKU), message acheteur et buyer_user_id.
+
+    Tiré du receipt Etsy déjà synchronisé ; lecture locale. Les variations (ex.
+    taille « L US letter », couleur « Black ») viennent des transactions.
+    """
+    try:
+        r = json.loads(raw_json or "{}")
+    except Exception:  # noqa: BLE001
+        return {}
+    txns = r.get("transactions") or []
+    items: list[dict] = []
+    for t in txns:
+        variations = []
+        for v in t.get("variations") or []:
+            name = html.unescape((v.get("formatted_name") or "").strip())
+            value = html.unescape((v.get("formatted_value") or "").strip())
+            if name or value:
+                variations.append({"name": name, "value": value})
+        items.append({
+            "listing_id": t.get("listing_id"),
+            "title": html.unescape((t.get("title") or "").strip()),
+            "quantity": int(t.get("quantity") or 1),
+            "price": _money(t.get("price")),
+            "sku": (t.get("sku") or "").strip(),
+            "variations": variations,
+        })
+    buyer_id = r.get("buyer_user_id") or (txns[0].get("buyer_user_id") if txns else None)
+    return {
+        "items_detail": items,
+        "message": html.unescape((r.get("message_from_buyer") or "").strip()),
+        "gift_message": html.unescape((r.get("gift_message") or "").strip()),
+        "buyer_user_id": buyer_id,
+    }
+
+
 def _compute(
     order: sqlite3.Row, st: dict, costs: dict[int, float], *, with_address: bool = False
 ) -> dict:
@@ -488,6 +524,12 @@ def _compute(
     o["items"] = items
     if with_address:
         o["address"] = _address_from_raw(raw)
+        extras = _order_extras_from_raw(raw)
+        if extras.get("items_detail"):
+            o["items_detail"] = extras["items_detail"]
+        o["message"] = extras.get("message") or None
+        o["gift_message"] = extras.get("gift_message") or None
+        o["buyer_user_id"] = extras.get("buyer_user_id")
 
     revenue = o["subtotal"] + o["shipping_charged"]
     fees = st["listing_fee"] * max(1, o["item_count"])
