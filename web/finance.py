@@ -876,12 +876,16 @@ def list_orders(
     """Liste paginée des commandes de la fenêtre (avec frais/net calculés)."""
     orders = _orders_window(days, shop, country, with_address=True)
     with_message = sum(1 for o in orders if o.get("message"))
+    _no_sup = lambda o: not o["excluded"] and not (o.get("ali_order") or "").strip()
+    no_supplier = sum(1 for o in orders if _no_sup(o))
     if ship == "to_ship":
         orders = [o for o in orders if not o["shipped"] and not o["excluded"]]
     elif ship == "shipped":
         orders = [o for o in orders if o["shipped"]]
     elif ship == "message":
         orders = [o for o in orders if o.get("message")]
+    elif ship == "no_supplier":
+        orders = [o for o in orders if _no_sup(o)]
     total = len(orders)
     limit = max(1, min(int(limit), 200))
     offset = max(0, int(offset))
@@ -894,6 +898,7 @@ def list_orders(
         "total": total,
         "to_ship": _to_ship_count(shop),
         "with_message": with_message,
+        "no_supplier": no_supplier,
     }
 
 

@@ -2950,6 +2950,8 @@ async function finLoadOrders(reset = false) {
       `${d.total} commande${d.total > 1 ? "s" : ""} · ${d.to_ship} à expédier (toutes périodes)`;
     const mc = $("#fin-msg-count");
     if (mc) { mc.textContent = d.with_message || ""; mc.classList.toggle("hidden", !d.with_message); }
+    const nsc = $("#fin-nosup-count");
+    if (nsc) { nsc.textContent = d.no_supplier || ""; nsc.classList.toggle("hidden", !d.no_supplier); }
     $("#fin-more").classList.toggle("hidden", finState.offset + finState.limit >= d.total);
   } catch (e) { toast("Commandes : " + e.message, true); }
 }
@@ -2973,6 +2975,15 @@ function finOrderRow(o) {
   const refundBadge = (o.refunded > 0 && !o.fully_refunded)
     ? `<span class="fin-ship-chip refund" title="Remboursement partiel — déduit du net">↩ −${finMoney(o.refunded, cur)}</span>`
     : "";
+  // Statut « commande fournisseur » (audit AliExpress) : livré / commandé / manquant.
+  const dlv = (o.delivery_date || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const supplierChip = dlv
+    ? `<span class="fin-ship-chip deliv" title="Colis livré au client le ${o.delivery_date}">🚚 livré ${dlv[3]}/${dlv[2]}</span>`
+    : (o.ali_order || "").trim()
+      ? `<span class="fin-ship-chip sup" title="Commande fournisseur AliExpress : ${escapeHtml(o.ali_order)}">📦 commandé</span>`
+      : (!o.excluded
+          ? `<span class="fin-ship-chip nosup" title="Aucune commande fournisseur reliée à cette vente">⚠ Sans fournisseur</span>`
+          : "");
   const a = o.address || {};
   const addrCompact = [a.street, a.city_line, countryName(o.buyer_country)]
     .filter(Boolean).join(", ");
@@ -3015,7 +3026,7 @@ function finOrderRow(o) {
       <span class="fin-o-qty" title="${o.item_count} article${o.item_count > 1 ? "s" : ""}">×${o.item_count}</span>
       <span class="fin-o-rev">${finMoney(o.revenue, cur)}</span>
       <span class="fin-o-net${o.net < 0 ? " neg" : ""}">${o.excluded ? "" : "net " + finMoney(o.net, cur)}</span>
-      ${shipChip}${refundBadge}
+      ${shipChip}${refundBadge}${supplierChip}
       ${o.message
         ? `<a class="fin-o-msg" href="${etsyConvoUrl(o.buyer_user_id)}" target="_blank" rel="noopener"
              title="Message de l'acheteur — clic = ouvrir la conversation sur Etsy&#10;&#10;${escapeHtml(o.message)}"

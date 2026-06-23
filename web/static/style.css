@@ -954,6 +954,10 @@ table.grid td.act .xs { margin-left: 6px; }
 .fin-ship-chip.ok { background: var(--ok-bg); color: var(--ok); }
 .fin-ship-chip.todo { background: var(--accent-soft); color: var(--accent-dark); }
 .fin-ship-chip.excl { background: var(--err-bg); color: var(--err); }
+/* Statut commande fournisseur (audit AliExpress) */
+.fin-ship-chip.deliv { background: #e6f4ea; color: #1e7d34; border: 1px solid #bfe3c8; }
+.fin-ship-chip.sup { background: #eef1f6; color: #4a5568; border: 1px solid #d7dde7; }
+.fin-ship-chip.nosup { background: #fde7e7; color: #b13b2e; border: 1px solid #f0cdc8; }
 .fin-order-detail { border-top: 1px dashed var(--line); padding: 10px 12px; }
 .fin-od-breakdown { margin: 0 0 4px; }
 .fin-od-ship { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
