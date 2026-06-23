@@ -1696,6 +1696,12 @@ def finance_orders(
     )
 
 
+@app.post("/api/finance/sync-deliveries")
+def finance_sync_deliveries() -> dict:
+    """Met à jour les dates de livraison en lisant la boîte Gmail « Lana »."""
+    return finance.sync_deliveries()
+
+
 @app.post("/api/finance/orders/{receipt_id}/shipping")
 def finance_set_shipping(receipt_id: int, req: FinShipReq) -> dict:
     """Marque une commande expédiée / saisit n° de suivi (LOCAL uniquement)."""

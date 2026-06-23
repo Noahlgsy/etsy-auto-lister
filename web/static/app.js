@@ -2648,6 +2648,28 @@ async function finSync() {
   }
 }
 
+// Lit la boîte Gmail « Lana » et remplit les dates de livraison.
+async function finSyncDeliveries() {
+  const btn = $("#fin-sync-deliv");
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spin"></span>Lecture Gmail…`;
+  try {
+    const d = await api("/api/finance/sync-deliveries", { method: "POST" });
+    if (d && d.ok === false) {
+      toast("Livraisons : " + (d.error || "échec"), true);
+    } else {
+      toast(`🚚 ${d.updated} date(s) de livraison ajoutée(s) · ${d.detected} détectée(s).`);
+      await finRefresh();
+    }
+  } catch (e) {
+    toast("Livraisons : " + e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
 // ---- KPIs ------------------------------------------------------------------
 async function finLoadSummary() {
   try {
@@ -3267,6 +3289,7 @@ async function finDelAd(day) {
 
 function finInit() {
   $("#fin-sync").addEventListener("click", finSync);
+  $("#fin-sync-deliv")?.addEventListener("click", finSyncDeliveries);
   $("#fin-days").addEventListener("change", () => {
     finState.days = Number($("#fin-days").value);
     finRefresh(false);

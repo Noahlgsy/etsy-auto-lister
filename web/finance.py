@@ -902,6 +902,127 @@ def list_orders(
     }
 
 
+def sync_deliveries() -> dict:
+    """Lit la boîte Gmail « Lana » (IMAP) et remplit `delivery_date` pour les
+    commandes déjà reliées (qui ont un `ali_order`). N'écrase jamais une date
+    existante. Renvoie {ok, updated, detected} ou {ok: False, error}.
+
+    Variables d'environnement : LANA_GMAIL, LANA_GMAIL_APP_PWD (mot de passe
+    d'application Google, IMAP activé), LANA_SINCE (facultatif).
+    """
+    import email as _email
+    import imaplib
+    import re as _re
+    from email.header import decode_header, make_header
+    from email.utils import parsedate_to_datetime
+
+    user = os.environ.get("LANA_GMAIL", "").strip()
+    pwd = os.environ.get("LANA_GMAIL_APP_PWD", "").replace(" ", "")
+    if not user or not pwd:
+        return {"ok": False, "error": "Identifiants Gmail « Lana » non configurés "
+                "(LANA_GMAIL / LANA_GMAIL_APP_PWD)."}
+    since = os.environ.get("LANA_SINCE", "01-May-2026")
+
+    order_re = _re.compile(r"\b(30\d{14})\b")
+    pkg_re = _re.compile(r"(?:colis|package|paquet)\s+([A-Z0-9]{10,})", _re.I)
+    deliv_re = _re.compile(r"livr[ée]|a ét[ée] livr|delivered|zugestellt|consegnat|entregad", _re.I)
+
+    def _subject(m):
+        try:
+            return str(make_header(decode_header(m.get("Subject", ""))))
+        except Exception:
+            return m.get("Subject", "") or ""
+
+    def _body(m):
+        out = []
+        for p in (m.walk() if m.is_multipart() else [m]):
+            if p.get_content_type() in ("text/plain", "text/html"):
+                try:
+                    raw = p.get_payload(decode=True).decode(
+                        p.get_content_charset() or "utf-8", "replace")
+                except Exception:
+                    continue
+                out.append(_re.sub(r"<[^>]+>", " ", raw))
+        return html.unescape(" ".join(out))
+
+    # n° de commande déjà reliés -> receipt_id
+    c = _db()
+    try:
+        order2rid: dict[str, int] = {}
+        for row in c.execute(
+            "SELECT receipt_id, ali_order FROM orders "
+            "WHERE ali_order IS NOT NULL AND ali_order!=''"
+        ):
+            for n in (row["ali_order"] or "").split(","):
+                n = n.strip()
+                if n:
+                    order2rid[n] = row["receipt_id"]
+    finally:
+        c.close()
+
+    try:
+        M = imaplib.IMAP4_SSL("imap.gmail.com")
+        M.login(user, pwd)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"Connexion Gmail échouée ({e}). Vérifie le mot de "
+                "passe d'application et qu'IMAP est activé."}
+
+    try:
+        M.select("INBOX")
+        _t, data = M.search(None, "SINCE", since, "FROM", "aliexpress")
+        ids = (data[0] or b"").split()
+        pkg2order: dict[str, str] = {}
+        deliv_by_order: dict[str, str] = {}
+        deliv_by_pkg: dict[str, str] = {}
+        for i in ids:
+            _t, d = M.fetch(i, "(RFC822)")
+            if not d or not d[0]:
+                continue
+            msg = _email.message_from_bytes(d[0][1])
+            subj = _subject(msg)
+            text = subj + "  " + _body(msg)
+            try:
+                mdate = parsedate_to_datetime(msg.get("Date")).strftime("%Y-%m-%d")
+            except Exception:
+                mdate = None
+            orders = set(order_re.findall(text))
+            pkgs = set(pkg_re.findall(text))
+            for o in orders:
+                for pk in pkgs:
+                    pkg2order.setdefault(pk, o)
+            if mdate and deliv_re.search(subj):
+                for o in orders:
+                    deliv_by_order[o] = mdate
+                for pk in pkgs:
+                    deliv_by_pkg[pk] = mdate
+        for pk, dt in deliv_by_pkg.items():
+            o = pkg2order.get(pk)
+            if o:
+                deliv_by_order.setdefault(o, dt)
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
+
+    updated = 0
+    c = _db()
+    try:
+        for o, dt in deliv_by_order.items():
+            rid = order2rid.get(o)
+            if rid is None:
+                continue
+            updated += c.execute(
+                "UPDATE orders SET delivery_date=? WHERE receipt_id=? "
+                "AND (delivery_date IS NULL OR delivery_date='')",
+                (dt, rid),
+            ).rowcount
+        c.commit()
+    finally:
+        c.close()
+    return {"ok": True, "updated": updated, "detected": len(deliv_by_order)}
+
+
 def _seq_map(shop_key: str | None = None) -> dict[int, int]:
     """Numéro d'ordre stable de chaque commande : #1 = la plus ancienne.
 
