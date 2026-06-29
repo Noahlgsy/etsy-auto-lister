@@ -1053,7 +1053,7 @@ def refunds(shop_key: str | None = None) -> dict:
     st = get_settings()
     seq = _seq_map(shop_key)
     sql = ("SELECT receipt_id, created_ts, status, buyer_name, buyer_country, "
-           "currency, grandtotal, raw_json FROM orders")
+           "currency, grandtotal, cost_override, cost_currency, raw_json FROM orders")
     args: list = []
     if shop_id:
         sql += " WHERE shop_id = ?"
@@ -1063,6 +1063,7 @@ def refunds(shop_key: str | None = None) -> dict:
 
     items: list[dict] = []
     total_eur = 0.0
+    total_cost_eur = 0.0
     for o in rows:
         try:
             r = json.loads(o["raw_json"] or "{}")
@@ -1081,6 +1082,14 @@ def refunds(shop_key: str | None = None) -> dict:
             eur = _to_eur(amt, cur, st)
             total_eur += eur
             grand = float(o["grandtotal"] or 0)
+            # Prix d'achat fournisseur (cost_override) → converti en € pour
+            # afficher la vraie perte à côté du CA remboursé.
+            cost = o["cost_override"]
+            ccur = (o["cost_currency"] or "EUR").upper()
+            cost_eur = round(_to_eur(float(cost), ccur, st), 2) \
+                if cost is not None else None
+            if cost_eur:
+                total_cost_eur += cost_eur
             items.append({
                 "receipt_id": o["receipt_id"],
                 "seq": seq.get(o["receipt_id"], 0),
@@ -1090,6 +1099,9 @@ def refunds(shop_key: str | None = None) -> dict:
                 "currency": cur,
                 "amount": amt,
                 "amount_eur": round(eur, 2),
+                "cost": round(float(cost), 2) if cost is not None else None,
+                "cost_currency": ccur,
+                "cost_eur": cost_eur,
                 "full": grand > 0 and amt >= round(grand, 2) - 0.01,
                 "reason": ref.get("reason") or None,
                 "note": (html.unescape(ref.get("note_from_issuer") or "").strip()
@@ -1104,6 +1116,7 @@ def refunds(shop_key: str | None = None) -> dict:
         "refunds": items,
         "count": len(items),
         "total_eur": round(total_eur, 2),
+        "total_cost_eur": round(total_cost_eur, 2),
     }
 
 

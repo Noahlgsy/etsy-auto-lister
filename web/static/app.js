@@ -2966,7 +2966,9 @@ async function finLoadRefunds() {
     const full = d.refunds.filter((r) => r.full).length;
     const cards = [
       { label: "Total remboursé", value: "− " + finMoney(d.total_eur, "EUR"),
-        sub: "converti en €", hero: true, neg: d.total_eur > 0 },
+        sub: "CA remboursé au client", hero: true, neg: d.total_eur > 0 },
+      { label: "Coût d'achat", value: "− " + finMoney(d.total_cost_eur, "EUR"),
+        sub: "articles déjà payés" },
       { label: "Remboursements", value: String(d.count), sub: "toutes périodes" },
       { label: "Total / partiel", value: `${full} / ${d.count - full}`,
         sub: "annulations / partiels" },
@@ -2979,7 +2981,8 @@ async function finLoadRefunds() {
     ).join("");
     $("#fin-refunds-table").innerHTML = d.count
       ? `<table class="fin-table"><thead><tr><th>#</th><th>Date</th><th>Client</th>` +
-        `<th>Raison</th><th>Type</th><th class="num">Montant</th></tr></thead><tbody>` +
+        `<th>Raison</th><th>Type</th><th class="num">Prix d'achat</th>` +
+        `<th class="num">Montant</th></tr></thead><tbody>` +
         d.refunds.map(finRefundRow).join("") + `</tbody></table>`
       : `<p class="muted">Aucun remboursement à ce jour. 🎉</p>`;
   } catch (e) { toast("Remboursements : " + e.message, true); }
@@ -2996,12 +2999,17 @@ function finRefundRow(r) {
   const inCur = (r.currency && r.currency !== "EUR")
     ? ` <span class="muted small">(${finMoney(r.amount, r.currency)})</span>` : "";
   const note = r.note ? `<div class="muted small">${escapeHtml(r.note)}</div>` : "";
+  const costCur = (r.cost != null && r.cost_currency && r.cost_currency !== "EUR")
+    ? ` <span class="muted small">(${finMoney(r.cost, r.cost_currency)})</span>` : "";
+  const costCell = (r.cost_eur != null)
+    ? `− ${finMoney(r.cost_eur, "EUR")}${costCur}` : "—";
   return `<tr>` +
     `<td class="num muted">${r.seq ? "#" + r.seq : "—"}</td>` +
     `<td>${date}</td>` +
     `<td>${flagEmoji(r.country)} ${escapeHtml(r.buyer_name)}</td>` +
     `<td>${escapeHtml(r.reason || "—")}${note}</td>` +
     `<td>${type}</td>` +
+    `<td class="num muted">${costCell}</td>` +
     `<td class="num neg">− ${finMoney(r.amount_eur, "EUR")}${inCur}</td>` +
     `</tr>`;
 }
