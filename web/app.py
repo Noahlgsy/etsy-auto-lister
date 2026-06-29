@@ -1680,6 +1680,12 @@ def finance_cashflow(days: int = 90, shop: str | None = None) -> dict:
     return finance.cashflow(days=days, shop=shop)
 
 
+@app.get("/api/finance/refunds")
+def finance_refunds(shop: str | None = None) -> dict:
+    """Liste de tous les remboursements (partiels + annulations), toutes périodes."""
+    return finance.refunds(shop)
+
+
 @app.get("/api/finance/orders")
 def finance_orders(
     days: int = 30,

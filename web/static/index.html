@@ -220,6 +220,7 @@
             <button class="fin-tab active" data-fintab="dash" type="button">Tableau de bord</button>
             <button class="fin-tab" data-fintab="orders" type="button">Commandes <span id="fin-toship" class="mini-badge hidden"></span></button>
             <button class="fin-tab" data-fintab="treso" type="button">Trésorerie</button>
+            <button class="fin-tab" data-fintab="refunds" type="button">Remboursements <span id="fin-refunds-count" class="mini-badge hidden"></span></button>
             <button class="fin-tab" data-fintab="costs" type="button">Coûts &amp; frais</button>
           </div>
           <div class="fin-filters">
@@ -305,6 +306,18 @@
               <span class="muted small">entrées datées à la vente · sorties à la date d'achat</span>
             </div>
             <div id="fin-treso-table"></div>
+          </div>
+        </div>
+
+        <!-- Sous-vue : remboursements -->
+        <div id="fin-refunds" class="hidden">
+          <div id="fin-refunds-kpis" class="fin-kpis"></div>
+          <div class="card">
+            <div class="fin-orders-head">
+              <h3 style="margin:0">Remboursements</h3>
+              <span class="muted small">remboursements partiels &amp; annulations — toutes périodes</span>
+            </div>
+            <div id="fin-refunds-table"></div>
           </div>
         </div>
 

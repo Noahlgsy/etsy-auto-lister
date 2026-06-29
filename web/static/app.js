@@ -2622,9 +2622,11 @@ function finShowTab(tab) {
   $("#fin-dash").classList.toggle("hidden", tab !== "dash");
   $("#fin-orders").classList.toggle("hidden", tab !== "orders");
   $("#fin-treso").classList.toggle("hidden", tab !== "treso");
+  $("#fin-refunds").classList.toggle("hidden", tab !== "refunds");
   $("#fin-costs").classList.toggle("hidden", tab !== "costs");
   if (tab === "orders") finLoadOrders(true);
   if (tab === "treso") finLoadCashflow();
+  if (tab === "refunds") finLoadRefunds();
   if (tab === "costs") finLoadCosts();
 }
 
@@ -2953,6 +2955,55 @@ function finCountryTable(rows, cur) {
       `<td class="num">${finMoney(r.revenue, cur)}</td>` +
       `<td class="num${r.net < 0 ? " neg" : ""}">${finMoney(r.net, cur)}</td></tr>`
     ).join("") + `</tbody></table>`;
+}
+
+// ---- remboursements ---------------------------------------------------------
+async function finLoadRefunds() {
+  try {
+    const d = await api(`/api/finance/refunds${state.activeShop ? `?shop=${enc(state.activeShop)}` : ""}`);
+    const bc = $("#fin-refunds-count");
+    if (bc) { bc.textContent = d.count || ""; bc.classList.toggle("hidden", !d.count); }
+    const full = d.refunds.filter((r) => r.full).length;
+    const cards = [
+      { label: "Total remboursé", value: "− " + finMoney(d.total_eur, "EUR"),
+        sub: "converti en €", hero: true, neg: d.total_eur > 0 },
+      { label: "Remboursements", value: String(d.count), sub: "toutes périodes" },
+      { label: "Total / partiel", value: `${full} / ${d.count - full}`,
+        sub: "annulations / partiels" },
+    ];
+    $("#fin-refunds-kpis").innerHTML = cards.map((c) =>
+      `<div class="fin-kpi${c.hero ? " hero" : ""}${c.neg ? " neg" : ""}">` +
+      `<span class="fin-kpi-label">${c.label}</span>` +
+      `<span class="fin-kpi-value">${c.value}</span>` +
+      `<span class="fin-kpi-sub">${c.sub}</span></div>`
+    ).join("");
+    $("#fin-refunds-table").innerHTML = d.count
+      ? `<table class="fin-table"><thead><tr><th>#</th><th>Date</th><th>Client</th>` +
+        `<th>Raison</th><th>Type</th><th class="num">Montant</th></tr></thead><tbody>` +
+        d.refunds.map(finRefundRow).join("") + `</tbody></table>`
+      : `<p class="muted">Aucun remboursement à ce jour. 🎉</p>`;
+  } catch (e) { toast("Remboursements : " + e.message, true); }
+}
+
+function finRefundRow(r) {
+  const ts = r.refund_ts || r.order_ts;
+  const date = new Date(ts * 1000).toLocaleDateString("fr-FR", {
+    day: "2-digit", month: "short", year: "2-digit",
+  });
+  const type = r.full
+    ? `<span class="fin-ship-chip refund">↩ Total</span>`
+    : `<span class="fin-ship-chip refund">↩ Partiel</span>`;
+  const inCur = (r.currency && r.currency !== "EUR")
+    ? ` <span class="muted small">(${finMoney(r.amount, r.currency)})</span>` : "";
+  const note = r.note ? `<div class="muted small">${escapeHtml(r.note)}</div>` : "";
+  return `<tr>` +
+    `<td class="num muted">${r.seq ? "#" + r.seq : "—"}</td>` +
+    `<td>${date}</td>` +
+    `<td>${flagEmoji(r.country)} ${escapeHtml(r.buyer_name)}</td>` +
+    `<td>${escapeHtml(r.reason || "—")}${note}</td>` +
+    `<td>${type}</td>` +
+    `<td class="num neg">− ${finMoney(r.amount_eur, "EUR")}${inCur}</td>` +
+    `</tr>`;
 }
 
 // ---- commandes & expéditions ------------------------------------------------

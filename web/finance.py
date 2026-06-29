@@ -1041,6 +1041,72 @@ def _seq_map(shop_key: str | None = None) -> dict[int, int]:
     return {int(r["receipt_id"]): i + 1 for i, r in enumerate(rows)}
 
 
+def refunds(shop_key: str | None = None) -> dict:
+    """Liste de TOUS les remboursements Etsy (toutes périodes).
+
+    Source : le tableau ``refunds`` du receipt Etsy — couvre les remboursements
+    partiels ET les annulations (qui génèrent un remboursement total). Une
+    commande peut avoir plusieurs remboursements → une ligne par remboursement.
+    Montants dans la devise de la commande, plus un total converti en €.
+    """
+    shop_id = _shop_id_for_key(shop_key)
+    st = get_settings()
+    seq = _seq_map(shop_key)
+    sql = ("SELECT receipt_id, created_ts, status, buyer_name, buyer_country, "
+           "currency, grandtotal, raw_json FROM orders")
+    args: list = []
+    if shop_id:
+        sql += " WHERE shop_id = ?"
+        args.append(shop_id)
+    with _db() as conn:
+        rows = conn.execute(sql, args).fetchall()
+
+    items: list[dict] = []
+    total_eur = 0.0
+    for o in rows:
+        try:
+            r = json.loads(o["raw_json"] or "{}")
+        except Exception:  # noqa: BLE001
+            continue
+        for ref in r.get("refunds") or []:
+            status = (ref.get("status") or "").upper()
+            if status not in ("", "SUCCESS", "COMPLETE", "COMPLETED"):
+                continue
+            amt = _money(ref.get("amount"))
+            if amt <= 0:
+                continue
+            money = ref.get("amount")
+            cur = (money.get("currency_code") if isinstance(money, dict) else None) \
+                or o["currency"] or "EUR"
+            eur = _to_eur(amt, cur, st)
+            total_eur += eur
+            grand = float(o["grandtotal"] or 0)
+            items.append({
+                "receipt_id": o["receipt_id"],
+                "seq": seq.get(o["receipt_id"], 0),
+                "buyer_name": (o["buyer_name"] or "").strip() or "—",
+                "country": o["buyer_country"],
+                "order_total": round(grand, 2),
+                "currency": cur,
+                "amount": amt,
+                "amount_eur": round(eur, 2),
+                "full": grand > 0 and amt >= round(grand, 2) - 0.01,
+                "reason": ref.get("reason") or None,
+                "note": (html.unescape(ref.get("note_from_issuer") or "").strip()
+                         or None),
+                "refund_ts": int(ref.get("created_timestamp") or 0) or None,
+                "order_ts": o["created_ts"],
+                "status": o["status"],
+            })
+
+    items.sort(key=lambda x: x["refund_ts"] or x["order_ts"], reverse=True)
+    return {
+        "refunds": items,
+        "count": len(items),
+        "total_eur": round(total_eur, 2),
+    }
+
+
 def set_shipping(receipt_id: int, fields: dict) -> dict:
     """Met à jour le suivi d'expédition LOCAL d'une commande.
 
